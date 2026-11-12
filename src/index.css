@@ -36,15 +36,24 @@ html,
 body,
 #root {
   min-height: 100%;
+  min-height: 100dvh;
 }
 
 body {
   margin: 0;
   min-width: 320px;
+  padding:
+    env(safe-area-inset-top, 0)
+    env(safe-area-inset-right, 0)
+    env(safe-area-inset-bottom, 0)
+    env(safe-area-inset-left, 0);
   background:
     radial-gradient(1200px 500px at 10% -10%, rgba(126, 189, 194, 0.35), transparent 60%),
     radial-gradient(900px 420px at 100% 0%, rgba(232, 213, 183, 0.45), transparent 55%),
     linear-gradient(180deg, #eef5f6 0%, #f7fafb 42%, #f3f7f8 100%);
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 button,
@@ -71,7 +80,7 @@ img {
 .app-shell {
   width: min(1120px, calc(100% - 2rem));
   margin: 0 auto;
-  padding: 1.25rem 0 4rem;
+  padding: 1.25rem 0 calc(4rem + env(safe-area-inset-bottom, 0px));
 }
 
 .topbar {
@@ -652,6 +661,12 @@ img {
     display: none;
   }
 
+  .primary-btn,
+  .ghost-btn,
+  .danger-btn {
+    min-height: 44px;
+  }
+
   .activity {
     grid-template-columns: 3.6rem 1fr;
   }
@@ -667,7 +682,31 @@ img {
   }
 
   .hero {
-    min-height: 70vh;
+    min-height: min(68dvh, 520px);
     border-radius: 22px;
+  }
+
+  .trip-header-top {
+    flex-direction: column;
+  }
+
+  .trip-actions {
+    width: 100%;
+  }
+
+  .trip-actions .ghost-btn,
+  .trip-actions .danger-btn {
+    flex: 1;
+  }
+
+  .modal {
+    width: 100%;
+    border-radius: 18px 18px 0 0;
+    max-height: min(92dvh, 760px);
+    align-self: end;
+  }
+
+  .modal-backdrop {
+    align-items: end;
   }
 }
