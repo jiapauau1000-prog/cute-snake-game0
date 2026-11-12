@@ -39,6 +39,9 @@ export function createTrip(input: {
   endDate: string;
   cover: CoverTone;
   notes: string;
+  currency?: string;
+  coverImage?: string;
+  budgetCap?: number;
 }): Trip {
   const now = new Date().toISOString();
   return {
@@ -49,7 +52,12 @@ export function createTrip(input: {
     endDate: input.endDate,
     cover: input.cover,
     notes: input.notes.trim(),
-    currency: 'TWD',
+    currency: (input.currency || 'TWD').trim().toUpperCase() || 'TWD',
+    coverImage: input.coverImage || undefined,
+    budgetCap:
+      typeof input.budgetCap === 'number' && Number.isFinite(input.budgetCap) && input.budgetCap > 0
+        ? input.budgetCap
+        : undefined,
     packing: [
       { id: uid('pack'), label: '護照／身分證件', done: false },
       { id: uid('pack'), label: '充電器與行動電源', done: false },
@@ -62,6 +70,52 @@ export function createTrip(input: {
     createdAt: now,
     updatedAt: now,
   };
+}
+
+export function duplicateTrip(trip: Trip): Trip {
+  const now = new Date().toISOString();
+  const idMap = new Map<string, string>();
+  const mapId = (oldId: string, prefix: string) => {
+    const next = uid(prefix);
+    idMap.set(oldId, next);
+    return next;
+  };
+
+  return {
+    ...structuredClone(trip),
+    id: uid('trip'),
+    title: `${trip.title.trim()}（副本）`,
+    shareCode: undefined,
+    editToken: undefined,
+    shared: false,
+    revision: undefined,
+    packing: (trip.packing || []).map((item) => ({
+      ...item,
+      id: mapId(item.id, 'pack'),
+      done: false,
+    })),
+    pins: (trip.pins || []).map((item) => ({ ...item, id: mapId(item.id, 'pin') })),
+    members: (trip.members || []).map((item) => ({ ...item, id: mapId(item.id, 'member') })),
+    comments: [],
+    days: trip.days.map((day) => ({
+      ...day,
+      activities: day.activities.map((activity) => ({
+        ...activity,
+        id: mapId(activity.id, 'act'),
+      })),
+    })),
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function daysUntilTrip(startDate: string): number | null {
+  const start = parseISO(startDate);
+  if (Number.isNaN(start.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  start.setHours(0, 0, 0, 0);
+  return Math.round((start.getTime() - today.getTime()) / 86_400_000);
 }
 
 export function updateTripDates(trip: Trip, startDate: string, endDate: string): Trip {

@@ -136,6 +136,19 @@ export function isValidTrip(value: unknown): value is Trip {
       return false;
     }
   }
+  if (trip.currency !== undefined) {
+    if (typeof trip.currency !== 'string' || !/^[A-Z]{3}$/.test(trip.currency)) return false;
+  }
+  if (trip.budgetCap !== undefined) {
+    if (
+      typeof trip.budgetCap !== 'number' ||
+      !Number.isFinite(trip.budgetCap) ||
+      trip.budgetCap < 0 ||
+      trip.budgetCap > 1_000_000_000
+    ) {
+      return false;
+    }
+  }
   if (trip.packing && (!Array.isArray(trip.packing) || trip.packing.length > MAX_LIST || !trip.packing.every(isPacking))) {
     return false;
   }

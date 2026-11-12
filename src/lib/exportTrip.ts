@@ -1,7 +1,7 @@
 import type { Trip } from '../types';
 import { CATEGORY_LABELS, ROLE_LABELS } from '../types';
 import { formatDateRange, formatDayHeading } from './trips';
-import { formatMoney, tripBudget } from './budget';
+import { budgetRemaining, formatMoney, tripBudget } from './budget';
 
 function icsEscape(text: string): string {
   return text.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/,/g, '\\,').replace(/;/g, '\\;');
@@ -102,7 +102,11 @@ export function buildPrintableHtml(trip: Trip): string {
     @media print{button{display:none}}
   </style></head><body>
   <h1>${title}</h1>
-  <p class="meta">${destination} · ${escapeHtml(formatDateRange(trip.startDate, trip.endDate))} · 預算合計 ${escapeHtml(formatMoney(tripBudget(trip), currency))}</p>
+  <p class="meta">${destination} · ${escapeHtml(formatDateRange(trip.startDate, trip.endDate))} · 預算合計 ${escapeHtml(formatMoney(tripBudget(trip), currency))}${
+    typeof trip.budgetCap === 'number' && trip.budgetCap > 0
+      ? ` · 上限 ${escapeHtml(formatMoney(trip.budgetCap, currency))} · 剩餘 ${escapeHtml(formatMoney(budgetRemaining(trip) ?? 0, currency))}`
+      : ''
+  }</p>
   ${notes}
   ${daysHtml}
   ${packing ? `<section><h2>行李清單</h2><ul>${packing}</ul></section>` : ''}

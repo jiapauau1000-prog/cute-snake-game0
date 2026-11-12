@@ -61,6 +61,8 @@ export interface Trip {
   /** Optional trip cover photo (https or data URL). */
   coverImage?: string;
   currency?: string;
+  /** Optional total budget cap in trip currency. */
+  budgetCap?: number;
   packing?: PackingItem[];
   pins?: PinnedPlace[];
   members?: TripMember[];

@@ -11,9 +11,16 @@ import type {
   TripPanel,
 } from '../types';
 import { ROLE_LABELS } from '../types';
-import { dayBudget, formatMoney, tripBudget } from '../lib/budget';
+import {
+  budgetRemaining,
+  categoryBudget,
+  dayBudget,
+  formatMoney,
+  tripBudget,
+} from '../lib/budget';
 import { downloadIcs, printTrip } from '../lib/exportTrip';
 import { mapsNavigateUrl, mapsSearchUrl } from '../lib/maps';
+import { mergePackingTemplate, packingTemplateLabels } from '../lib/packingTemplates';
 import { apiUrl } from '../lib/shareApi';
 import { uid } from '../lib/storage';
 import { formatDayHeading } from '../lib/trips';
@@ -39,12 +46,14 @@ export function TripExtras({
   panel,
   onPanelChange,
   onPatch,
+  onAddPinToPlan,
 }: {
   trip: Trip;
   dayIndex: number;
   panel: TripPanel;
   onPanelChange: (panel: TripPanel) => void;
   onPatch: (patch: Partial<Trip>) => void;
+  onAddPinToPlan?: (pin: PinnedPlace) => void;
 }) {
   const currency = trip.currency || 'TWD';
   const packing = trip.packing || [];
@@ -89,16 +98,26 @@ export function TripExtras({
       </div>
 
       {panel === 'budget' && (
-        <BudgetPanel trip={trip} dayIndex={dayIndex} currency={currency} />
+        <BudgetPanel
+          trip={trip}
+          dayIndex={dayIndex}
+          currency={currency}
+          onCapChange={(budgetCap) => onPatch({ budgetCap })}
+        />
       )}
       {panel === 'packing' && (
         <PackingPanel
+          trip={trip}
           packing={packing}
           onChange={(next) => onPatch({ packing: next })}
         />
       )}
       {panel === 'pins' && (
-        <PinsPanel pins={pins} onChange={(next) => onPatch({ pins: next })} />
+        <PinsPanel
+          pins={pins}
+          onChange={(next) => onPatch({ pins: next })}
+          onAddToPlan={onAddPinToPlan}
+        />
       )}
       {panel === 'team' && (
         <TeamPanel
@@ -172,25 +191,81 @@ function BudgetPanel({
   trip,
   dayIndex,
   currency,
+  onCapChange,
 }: {
   trip: Trip;
   dayIndex: number;
   currency: string;
+  onCapChange: (budgetCap: number | undefined) => void;
 }) {
+  const spent = tripBudget(trip);
+  const remaining = budgetRemaining(trip);
+  const categories = categoryBudget(trip);
+  const [capInput, setCapInput] = useState(
+    trip.budgetCap && trip.budgetCap > 0 ? String(trip.budgetCap) : '',
+  );
+
   return (
     <div className="extra-card">
       <h3>預算總覽</h3>
-      <p className="form-hint">在活動裡填金額後，這裡會自動加總。</p>
+      <p className="form-hint">在活動裡填金額後，這裡會自動加總；可設定整趟預算上限。</p>
+      <div className="inline-form">
+        <input
+          type="number"
+          min="0"
+          step="1"
+          value={capInput}
+          onChange={(e) => setCapInput(e.target.value)}
+          placeholder="預算上限（選填）"
+        />
+        <button
+          type="button"
+          className="primary-btn"
+          onClick={() => {
+            const value = Number(capInput);
+            if (!capInput.trim()) {
+              onCapChange(undefined);
+              return;
+            }
+            if (!Number.isFinite(value) || value <= 0) return;
+            onCapChange(Math.round(value));
+          }}
+        >
+          設定上限
+        </button>
+      </div>
       <div className="budget-stats">
         <div>
           <span>整趟合計</span>
-          <strong>{formatMoney(tripBudget(trip), currency)}</strong>
+          <strong>{formatMoney(spent, currency)}</strong>
         </div>
         <div>
           <span>今日小計</span>
           <strong>{formatMoney(dayBudget(trip, dayIndex), currency)}</strong>
         </div>
+        {typeof trip.budgetCap === 'number' && trip.budgetCap > 0 && (
+          <div>
+            <span>剩餘預算</span>
+            <strong className={(remaining ?? 0) < 0 ? 'budget-over' : undefined}>
+              {formatMoney(remaining ?? 0, currency)}
+            </strong>
+          </div>
+        )}
       </div>
+      {categories.length > 0 && (
+        <>
+          <h4 className="budget-subhead">分類花費</h4>
+          <ul className="budget-list">
+            {categories.map((row) => (
+              <li key={row.category}>
+                <span>{row.label}</span>
+                <strong>{formatMoney(row.amount, currency)}</strong>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <h4 className="budget-subhead">每日小計</h4>
       <ul className="budget-list">
         {trip.days.map((day, index) => (
           <li key={day.date}>
@@ -204,17 +279,39 @@ function BudgetPanel({
 }
 
 function PackingPanel({
+  trip,
   packing,
   onChange,
 }: {
+  trip: Trip;
   packing: PackingItem[];
   onChange: (items: PackingItem[]) => void;
 }) {
   const [label, setLabel] = useState('');
+  const haystack = `${trip.destination} ${trip.title}`.toLowerCase();
+  const beachy = /沖繩|墾丁|峇里|夏威夷|beach|海邊|海島|綠島|蘭嶼/.test(haystack);
+  const cold = /北海道|札幌|富良野|小樽|ski|北歐|冰島|哈爾濱/.test(haystack);
 
   return (
     <div className="extra-card">
       <h3>行李清單</h3>
+      <p className="form-hint">可一鍵加入常用範本，再依行程微調。</p>
+      <div className="export-bar" style={{ marginBottom: '0.75rem' }}>
+        <button
+          type="button"
+          className="ghost-btn"
+          onClick={() =>
+            onChange(
+              mergePackingTemplate(
+                packing,
+                packingTemplateLabels({ rainy: true, beachy, cold }),
+              ),
+            )
+          }
+        >
+          套用行李範本
+        </button>
+      </div>
       <div className="inline-form">
         <input
           value={label}
@@ -266,9 +363,11 @@ function PackingPanel({
 function PinsPanel({
   pins,
   onChange,
+  onAddToPlan,
 }: {
   pins: PinnedPlace[];
   onChange: (items: PinnedPlace[]) => void;
+  onAddToPlan?: (pin: PinnedPlace) => void;
 }) {
   const [name, setName] = useState('');
   const [note, setNote] = useState('');
@@ -276,7 +375,7 @@ function PinsPanel({
   return (
     <div className="extra-card">
       <h3>地點收藏</h3>
-      <p className="form-hint">把想去的店與景點釘起來，之後可一鍵導航。</p>
+      <p className="form-hint">把想去的店與景點釘起來，之後可導航或加入當日行程。</p>
       <div className="inline-form">
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="地點名稱" />
         <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="備註（選填）" />
@@ -314,6 +413,11 @@ function PinsPanel({
                 <a href={mapsSearchUrl(pin.name)} target="_blank" rel="noopener noreferrer">
                   地圖
                 </a>
+                {onAddToPlan && (
+                  <button type="button" onClick={() => onAddToPlan(pin)}>
+                    加入今日
+                  </button>
+                )}
               </div>
             </div>
             <button

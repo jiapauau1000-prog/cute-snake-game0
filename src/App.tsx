@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { Activity, CoverTone, Trip, TripPanel } from './types';
+import type { Activity, CoverTone, PinnedPlace, Trip, TripPanel } from './types';
 import { CATEGORY_LABELS, COVER_LABELS } from './types';
 import { TripExtras } from './components/TripExtras';
 import { formatMoney } from './lib/budget';
@@ -15,6 +15,8 @@ import {
 } from './lib/storage';
 import {
   createTrip,
+  daysUntilTrip,
+  duplicateTrip,
   formatDateRange,
   formatDayHeading,
   orphanedActivityCount,
@@ -410,6 +412,15 @@ export default function App() {
           onOpen={openTrip}
           onCreate={() => setModal({ type: 'trip' })}
           onJoin={() => setModal({ type: 'join' })}
+          onDuplicate={(id) => {
+            const source = tripsRef.current.find((t) => t.id === id);
+            if (!source) return;
+            const copy = duplicateTrip(source);
+            upsertTrip(copy);
+            setActiveTripId(copy.id);
+            setDayIndex(0);
+            showToast('已複製旅程');
+          }}
         />
       ) : (
         <TripView
@@ -434,6 +445,13 @@ export default function App() {
             }
             void shareTrip(activeTrip);
           }}
+          onDuplicateTrip={() => {
+            const copy = duplicateTrip(activeTrip);
+            upsertTrip(copy);
+            setActiveTripId(copy.id);
+            setDayIndex(0);
+            showToast('已複製旅程');
+          }}
           onDeleteTrip={() => {
             if (window.confirm(`確定刪除「${activeTrip.title}」？`)) {
               void deleteTrip(activeTrip.id);
@@ -442,6 +460,21 @@ export default function App() {
           onAddActivity={() => setModal({ type: 'activity', dayIndex })}
           onEditActivity={(activity) => setModal({ type: 'activity', dayIndex, activity })}
           onRemoveActivity={(activityId) => removeActivity(dayIndex, activityId)}
+          onAddPinToPlan={(pin) => {
+            setPanel('plan');
+            setModal({
+              type: 'activity',
+              dayIndex,
+              activity: {
+                id: '',
+                title: pin.note || pin.name,
+                place: pin.name,
+                time: '10:00',
+                category: 'sight',
+                notes: '',
+              },
+            });
+          }}
         />
       )}
 
@@ -471,6 +504,9 @@ export default function App() {
                   destination: values.destination.trim(),
                   cover: values.cover,
                   notes: values.notes.trim(),
+                  currency: values.currency,
+                  coverImage: values.coverImage || undefined,
+                  budgetCap: values.budgetCap,
                   updatedAt: new Date().toISOString(),
                 },
                 values.startDate,
@@ -495,11 +531,12 @@ export default function App() {
           activity={modal.activity}
           onClose={() => setModal(null)}
           onSave={(values) => {
+            const editingId = modal.activity?.id?.trim() || undefined;
             const next: Activity = {
-              id: modal.activity?.id ?? uid('act'),
+              id: editingId ?? uid('act'),
               ...values,
             };
-            saveActivity(modal.dayIndex, next, modal.activity?.id);
+            saveActivity(modal.dayIndex, next, editingId);
             setModal(null);
           }}
         />
@@ -565,11 +602,13 @@ function HomeView({
   onOpen,
   onCreate,
   onJoin,
+  onDuplicate,
 }: {
   trips: Trip[];
   onOpen: (id: string) => void;
   onCreate: () => void;
   onJoin: () => void;
+  onDuplicate: (id: string) => void;
 }) {
   return (
     <>
@@ -613,22 +652,40 @@ function HomeView({
         </div>
       ) : (
         <div className="trip-grid">
-          {trips.map((trip) => (
-            <button key={trip.id} type="button" className="trip-tile" onClick={() => onOpen(trip.id)}>
-              <div className={`trip-tile-bg ${trip.cover}`} />
-              <div className="trip-tile-body">
-                <h3>{trip.title}</h3>
-                <p className="meta">
-                  {trip.destination} ・ {formatDateRange(trip.startDate, trip.endDate)}
-                </p>
-                <div className="stats">
-                  <span>{tripDayCount(trip)} 天</span>
-                  <span>{tripActivityCount(trip)} 個活動</span>
-                  {trip.shareCode && <span>共享 {trip.shareCode}</span>}
-                </div>
-              </div>
-            </button>
-          ))}
+          {trips.map((trip) => {
+            const eta = daysUntilTrip(trip.startDate);
+            return (
+              <article key={trip.id} className="trip-tile">
+                <button type="button" className="trip-tile-main" onClick={() => onOpen(trip.id)}>
+                  {isSafeImageSrc(trip.coverImage) ? (
+                    <img className="trip-tile-photo" src={trip.coverImage} alt="" />
+                  ) : (
+                    <div className={`trip-tile-bg ${trip.cover}`} />
+                  )}
+                  <div className="trip-tile-body">
+                    <h3>{trip.title}</h3>
+                    <p className="meta">
+                      {trip.destination} ・ {formatDateRange(trip.startDate, trip.endDate)}
+                    </p>
+                    <div className="stats">
+                      <span>{tripDayCount(trip)} 天</span>
+                      <span>{tripActivityCount(trip)} 個活動</span>
+                      {eta !== null && eta >= 0 && <span>還有 {eta} 天</span>}
+                      {eta !== null && eta < 0 && <span>進行中／已結束</span>}
+                      {trip.shareCode && <span>共享中</span>}
+                    </div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="trip-tile-copy"
+                  onClick={() => onDuplicate(trip.id)}
+                >
+                  複製
+                </button>
+              </article>
+            );
+          })}
         </div>
       )}
     </>
@@ -648,10 +705,12 @@ function TripView({
   onBack,
   onEditTrip,
   onShareTrip,
+  onDuplicateTrip,
   onDeleteTrip,
   onAddActivity,
   onEditActivity,
   onRemoveActivity,
+  onAddPinToPlan,
 }: {
   trip: Trip;
   dayIndex: number;
@@ -665,10 +724,12 @@ function TripView({
   onBack: () => void;
   onEditTrip: () => void;
   onShareTrip: () => void;
+  onDuplicateTrip: () => void;
   onDeleteTrip: () => void;
   onAddActivity: () => void;
   onEditActivity: (activity: Activity) => void;
   onRemoveActivity: (id: string) => void;
+  onAddPinToPlan: (pin: PinnedPlace) => void;
 }) {
   const day = trip.days[dayIndex];
   const currency = trip.currency || 'TWD';
@@ -720,6 +781,9 @@ function TripView({
             <button type="button" className="ghost-btn" onClick={onEditTrip}>
               編輯旅程
             </button>
+            <button type="button" className="ghost-btn" onClick={onDuplicateTrip}>
+              複製旅程
+            </button>
             <button type="button" className="danger-btn" onClick={onDeleteTrip}>
               刪除
             </button>
@@ -733,6 +797,7 @@ function TripView({
         panel={panel}
         onPanelChange={onPanelChange}
         onPatch={onPatchTrip}
+        onAddPinToPlan={onAddPinToPlan}
       />
 
       {panel === 'plan' && (
@@ -883,6 +948,9 @@ function TripModal({
     endDate: string;
     cover: CoverTone;
     notes: string;
+    currency: string;
+    coverImage?: string;
+    budgetCap?: number;
   }) => void;
 }) {
   const [title, setTitle] = useState(trip?.title ?? '');
@@ -891,7 +959,27 @@ function TripModal({
   const [endDate, setEndDate] = useState(trip?.endDate ?? '');
   const [cover, setCover] = useState<CoverTone>(trip?.cover ?? 'coast');
   const [notes, setNotes] = useState(trip?.notes ?? '');
+  const [currency, setCurrency] = useState(trip?.currency ?? 'TWD');
+  const [coverImage, setCoverImage] = useState(trip?.coverImage ?? '');
+  const [budgetCap, setBudgetCap] = useState(
+    trip?.budgetCap && trip.budgetCap > 0 ? String(trip.budgetCap) : '',
+  );
+  const [busyImage, setBusyImage] = useState(false);
   const [error, setError] = useState('');
+
+  async function onPickCover(file: File | null) {
+    if (!file) return;
+    setBusyImage(true);
+    setError('');
+    try {
+      const dataUrl = await compressImageFile(file);
+      setCoverImage(dataUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '封面壓縮失敗');
+    } finally {
+      setBusyImage(false);
+    }
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -903,7 +991,27 @@ function TripModal({
       setError('結束日期不可早於開始日期');
       return;
     }
-    onSave({ title, destination, startDate, endDate, cover, notes });
+    const currencyCode = currency.trim().toUpperCase() || 'TWD';
+    if (!/^[A-Z]{3}$/.test(currencyCode)) {
+      setError('幣別請使用三碼代碼，例如 TWD、JPY、USD');
+      return;
+    }
+    const capValue = budgetCap.trim() ? Number(budgetCap) : undefined;
+    if (capValue !== undefined && (!Number.isFinite(capValue) || capValue <= 0)) {
+      setError('預算上限需為正數');
+      return;
+    }
+    onSave({
+      title,
+      destination,
+      startDate,
+      endDate,
+      cover,
+      notes,
+      currency: currencyCode,
+      coverImage: coverImage || undefined,
+      budgetCap: capValue !== undefined ? Math.round(capValue) : undefined,
+    });
   }
 
   return (
@@ -956,6 +1064,30 @@ function TripModal({
               />
             </div>
           </div>
+          <div className="form-row two">
+            <div className="form-row">
+              <label htmlFor="trip-currency">幣別</label>
+              <input
+                id="trip-currency"
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+                placeholder="TWD"
+                maxLength={3}
+              />
+            </div>
+            <div className="form-row">
+              <label htmlFor="trip-budget-cap">預算上限（選填）</label>
+              <input
+                id="trip-budget-cap"
+                type="number"
+                min="0"
+                step="1"
+                value={budgetCap}
+                onChange={(e) => setBudgetCap(e.target.value)}
+                placeholder="例如：30000"
+              />
+            </div>
+          </div>
           <div className="form-row">
             <label>封面氛圍</label>
             <div className="cover-options">
@@ -972,6 +1104,32 @@ function TripModal({
             </div>
           </div>
           <div className="form-row">
+            <label>封面照片（選填）</label>
+            <label className="file-btn">
+              {busyImage ? '壓縮中…' : '從相簿上傳'}
+              <input
+                type="file"
+                accept="image/*"
+                disabled={busyImage}
+                onChange={(e) => void onPickCover(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <input
+              value={coverImage.startsWith('data:') ? '' : coverImage}
+              onChange={(e) => setCoverImage(e.target.value)}
+              placeholder="或貼上 https 圖片網址"
+              style={{ marginTop: '0.5rem' }}
+            />
+            {isSafeImageSrc(coverImage) && (
+              <img className="image-preview" src={coverImage} alt="封面預覽" />
+            )}
+            {coverImage && (
+              <button type="button" className="ghost-btn" onClick={() => setCoverImage('')}>
+                移除封面照片
+              </button>
+            )}
+          </div>
+          <div className="form-row">
             <label htmlFor="trip-notes">備註</label>
             <textarea
               id="trip-notes"
@@ -985,7 +1143,7 @@ function TripModal({
             <button type="button" className="ghost-btn" onClick={onClose}>
               取消
             </button>
-            <button type="submit" className="primary-btn">
+            <button type="submit" className="primary-btn" disabled={busyImage}>
               儲存
             </button>
           </div>
