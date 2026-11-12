@@ -2,27 +2,34 @@ import { NextResponse } from 'next/server';
 import type { Trip } from '../../../src/types';
 import { sql } from '../../../src/lib/db';
 import { generateShareCode } from '../../../src/lib/shareCode';
+import { assertTripPayloadSize, isValidTrip } from '../../../src/lib/tripValidate';
 
 export const runtime = 'nodejs';
 
-function isTrip(value: unknown): value is Trip {
-  if (!value || typeof value !== 'object') return false;
-  const trip = value as Trip;
-  return (
-    typeof trip.id === 'string' &&
-    typeof trip.title === 'string' &&
-    typeof trip.destination === 'string' &&
-    typeof trip.startDate === 'string' &&
-    typeof trip.endDate === 'string' &&
-    Array.isArray(trip.days)
-  );
-}
-
 export async function POST(request: Request) {
   try {
+    const contentLength = Number(request.headers.get('content-length') || '0');
+    if (contentLength > 1_500_000) {
+      return NextResponse.json({ error: '請求過大' }, { status: 413 });
+    }
+
     const body = (await request.json()) as { trip?: unknown };
-    if (!isTrip(body.trip)) {
-      return NextResponse.json({ error: '旅程資料不完整' }, { status: 400 });
+    if (!isValidTrip(body.trip)) {
+      return NextResponse.json({ error: '旅程資料不完整或圖片過大' }, { status: 400 });
+    }
+
+    const sizeError = assertTripPayloadSize(body.trip);
+    if (sizeError) {
+      return NextResponse.json({ error: sizeError }, { status: 413 });
+    }
+
+    // Soft cap: avoid unbounded table growth from one client session.
+    const countRows = await sql<{ count: string | number }>(
+      'select count(*)::int as count from shared_trips',
+    );
+    const total = Number(countRows[0]?.count ?? 0);
+    if (total >= 5000) {
+      return NextResponse.json({ error: '共享旅程已達上限，請稍後再試' }, { status: 429 });
     }
 
     let shareCode = '';

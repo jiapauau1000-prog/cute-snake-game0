@@ -12,6 +12,8 @@ export interface Activity {
   time: string;
   category: ActivityCategory;
   notes: string;
+  /** https URL or compressed data:image JPEG */
+  imageUrl?: string;
 }
 
 export interface TripDay {
@@ -27,6 +29,8 @@ export interface Trip {
   endDate: string;
   cover: CoverTone;
   notes: string;
+  /** Optional trip cover photo (https or data URL). */
+  coverImage?: string;
   days: TripDay[];
   createdAt: string;
   updatedAt: string;

@@ -28,6 +28,8 @@ import {
   pushSharedTrip,
   setStoredApiBase,
 } from './lib/shareApi';
+import { compressImageFile, isSafeImageSrc } from './lib/images';
+import { mapsEmbedUrl, mapsNavigateUrl, mapsSearchUrl } from './lib/maps';
 
 type Modal =
   | { type: 'trip'; trip?: Trip }
@@ -493,6 +495,9 @@ function TripView({
                 共享碼 {trip.shareCode}
               </span>
             )}
+            {isSafeImageSrc(trip.coverImage) && (
+              <img className="activity-photo" src={trip.coverImage} alt={trip.title} />
+            )}
             <h1 className="trip-title">{trip.title}</h1>
             <p className="trip-sub">
               {trip.destination} ・ {formatDateRange(trip.startDate, trip.endDate)}
@@ -562,6 +567,36 @@ function TripView({
                 {activity.place && <p className="place">{activity.place}</p>}
                 <span className="category">{CATEGORY_LABELS[activity.category]}</span>
                 {activity.notes && <p className="notes">{activity.notes}</p>}
+                {isSafeImageSrc(activity.imageUrl) && (
+                  <img className="activity-photo" src={activity.imageUrl} alt={activity.title} />
+                )}
+                {activity.place && (
+                  <>
+                    <div className="activity-tools">
+                      <a
+                        href={mapsNavigateUrl(activity.place)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        導航前往
+                      </a>
+                      <a
+                        href={mapsSearchUrl(activity.place)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        在地圖查看
+                      </a>
+                    </div>
+                    <iframe
+                      className="activity-map"
+                      title={`${activity.title} 地圖`}
+                      loading="lazy"
+                      referrerPolicy="no-referrer-when-downgrade"
+                      src={mapsEmbedUrl(activity.place)}
+                    />
+                  </>
+                )}
               </div>
               <div className="activity-actions">
                 <button
@@ -729,12 +764,32 @@ function ActivityModal({
   const [time, setTime] = useState(activity?.time ?? '10:00');
   const [category, setCategory] = useState(activity?.category ?? 'sight');
   const [notes, setNotes] = useState(activity?.notes ?? '');
+  const [imageUrl, setImageUrl] = useState(activity?.imageUrl ?? '');
   const [error, setError] = useState('');
+  const [busyImage, setBusyImage] = useState(false);
+
+  async function onPickImage(file: File | null) {
+    if (!file) return;
+    setBusyImage(true);
+    setError('');
+    try {
+      const dataUrl = await compressImageFile(file);
+      setImageUrl(dataUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '圖片處理失敗');
+    } finally {
+      setBusyImage(false);
+    }
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!title.trim()) {
       setError('請填寫活動名稱');
+      return;
+    }
+    if (imageUrl && !isSafeImageSrc(imageUrl)) {
+      setError('圖片網址需為 https 或已上傳的圖片');
       return;
     }
     onSave({
@@ -743,6 +798,7 @@ function ActivityModal({
       time,
       category,
       notes: notes.trim(),
+      imageUrl: imageUrl.trim() || undefined,
     });
   }
 
@@ -788,13 +844,39 @@ function ActivityModal({
             </div>
           </div>
           <div className="form-row">
-            <label htmlFor="act-place">地點</label>
+            <label htmlFor="act-place">地點（可開啟地圖導航）</label>
             <input
               id="act-place"
               value={place}
               onChange={(e) => setPlace(e.target.value)}
               placeholder="店名、車站或景點"
             />
+          </div>
+          <div className="form-row">
+            <label>活動圖片</label>
+            <label className="file-btn">
+              {busyImage ? '壓縮中…' : '從相簿上傳'}
+              <input
+                type="file"
+                accept="image/*"
+                disabled={busyImage}
+                onChange={(e) => void onPickImage(e.target.files?.[0] ?? null)}
+              />
+            </label>
+            <input
+              value={imageUrl.startsWith('data:') ? '' : imageUrl}
+              onChange={(e) => setImageUrl(e.target.value)}
+              placeholder="或貼上 https 圖片網址"
+              style={{ marginTop: '0.5rem' }}
+            />
+            {isSafeImageSrc(imageUrl) && (
+              <img className="image-preview" src={imageUrl} alt="預覽" />
+            )}
+            {imageUrl && (
+              <button type="button" className="ghost-btn" onClick={() => setImageUrl('')}>
+                移除圖片
+              </button>
+            )}
           </div>
           <div className="form-row">
             <label htmlFor="act-notes">備註</label>
@@ -810,7 +892,7 @@ function ActivityModal({
             <button type="button" className="ghost-btn" onClick={onClose}>
               取消
             </button>
-            <button type="submit" className="primary-btn">
+            <button type="submit" className="primary-btn" disabled={busyImage}>
               儲存
             </button>
           </div>

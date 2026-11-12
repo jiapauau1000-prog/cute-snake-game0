@@ -2,29 +2,36 @@ import { NextResponse } from 'next/server';
 import type { Trip } from '../../../../src/types';
 import { sql } from '../../../../src/lib/db';
 import { normalizeShareCode } from '../../../../src/lib/shareCode';
+import { assertTripPayloadSize, isValidTrip } from '../../../../src/lib/tripValidate';
 
 export const runtime = 'nodejs';
 
 type Ctx = { params: Promise<{ code: string }> };
 
-function isTrip(value: unknown): value is Trip {
-  if (!value || typeof value !== 'object') return false;
-  const trip = value as Trip;
-  return (
-    typeof trip.id === 'string' &&
-    typeof trip.title === 'string' &&
-    typeof trip.destination === 'string' &&
-    typeof trip.startDate === 'string' &&
-    typeof trip.endDate === 'string' &&
-    Array.isArray(trip.days)
-  );
+const recentLookups = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimit(key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  const entry = recentLookups.get(key);
+  if (!entry || entry.resetAt < now) {
+    recentLookups.set(key, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+  if (entry.count >= limit) return false;
+  entry.count += 1;
+  return true;
 }
 
-export async function GET(_request: Request, context: Ctx) {
+export async function GET(request: Request, context: Ctx) {
   try {
     const code = normalizeShareCode((await context.params).code);
-    if (code.length < 4) {
+    if (code.length < 4 || code.length > 16) {
       return NextResponse.json({ error: '分享碼無效' }, { status: 400 });
+    }
+
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
+    if (!rateLimit(`get:${ip}`, 60, 60_000)) {
+      return NextResponse.json({ error: '請求過於頻繁，請稍後再試' }, { status: 429 });
     }
 
     const rows = await sql<{
@@ -63,10 +70,29 @@ export async function GET(_request: Request, context: Ctx) {
 
 export async function PUT(request: Request, context: Ctx) {
   try {
+    const contentLength = Number(request.headers.get('content-length') || '0');
+    if (contentLength > 1_500_000) {
+      return NextResponse.json({ error: '請求過大' }, { status: 413 });
+    }
+
     const code = normalizeShareCode((await context.params).code);
+    if (code.length < 4 || code.length > 16) {
+      return NextResponse.json({ error: '分享碼無效' }, { status: 400 });
+    }
+
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
+    if (!rateLimit(`put:${ip}:${code}`, 40, 60_000)) {
+      return NextResponse.json({ error: '更新過於頻繁，請稍後再試' }, { status: 429 });
+    }
+
     const body = (await request.json()) as { trip?: unknown; revision?: unknown };
-    if (!isTrip(body.trip) || typeof body.revision !== 'number') {
-      return NextResponse.json({ error: '更新資料不完整' }, { status: 400 });
+    if (!isValidTrip(body.trip) || typeof body.revision !== 'number') {
+      return NextResponse.json({ error: '更新資料不完整或圖片過大' }, { status: 400 });
+    }
+
+    const sizeError = assertTripPayloadSize(body.trip);
+    if (sizeError) {
+      return NextResponse.json({ error: sizeError }, { status: 413 });
     }
 
     const current = await sql<{ revision: number }>(
@@ -77,7 +103,6 @@ export async function PUT(request: Request, context: Ctx) {
       return NextResponse.json({ error: '找不到這個分享碼' }, { status: 404 });
     }
 
-    // Last-write-wins for companion edits; client may pass stale revision.
     const nextRevision = Math.max(current[0].revision, body.revision) + 1;
     const trip: Trip = {
       ...body.trip,
