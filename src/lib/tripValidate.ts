@@ -8,11 +8,29 @@ import type {
   TripMember,
 } from '../types';
 
-const MAX_JSON_BYTES = 1_200_000;
+const MAX_JSON_BYTES = 400_000;
 const MAX_ACTIVITIES_PER_DAY = 40;
 const MAX_DAYS = 60;
-const MAX_IMAGE_CHARS = 400_000;
+const MAX_IMAGE_CHARS = 120_000;
 const MAX_LIST = 80;
+
+/** Shared cloud trips only allow remote https images, not huge data URLs. */
+export function assertSharedTripImages(trip: {
+  coverImage?: string;
+  days: Array<{ activities: Array<{ imageUrl?: string }> }>;
+}): string | null {
+  if (trip.coverImage?.startsWith('data:')) {
+    return '共享行程請改用 https 圖片網址，勿上傳大型內嵌圖片';
+  }
+  for (const day of trip.days) {
+    for (const activity of day.activities) {
+      if (activity.imageUrl?.startsWith('data:')) {
+        return '共享行程請改用 https 圖片網址，勿上傳大型內嵌圖片';
+      }
+    }
+  }
+  return null;
+}
 
 function isActivity(value: unknown): value is Activity {
   if (!value || typeof value !== 'object') return false;

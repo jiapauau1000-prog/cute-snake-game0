@@ -24,10 +24,13 @@ import {
   updateTripDates,
 } from './lib/trips';
 import {
+  deleteSharedTrip,
   fetchSharedTrip,
   getStoredApiBase,
+  isAllowedApiBase,
   publishSharedTrip,
   pushSharedTrip,
+  rotateSharedTrip,
   setStoredApiBase,
 } from './lib/shareApi';
 import { compressImageFile, isSafeImageSrc } from './lib/images';
@@ -401,7 +404,29 @@ export default function App() {
       )}
 
       {modal?.type === 'share' && (
-        <ShareModal trip={modal.trip} onClose={() => setModal(null)} />
+        <ShareModal
+          trip={modal.trip}
+          onClose={() => setModal(null)}
+          onRotated={(next) => {
+            upsertTrip(next);
+            setModal({ type: 'share', trip: next });
+            showToast('已輪替分享碼與編輯權杖');
+          }}
+          onUnshared={(tripId) => {
+            const local = tripsRef.current.find((t) => t.id === tripId);
+            if (local) {
+              upsertTrip({
+                ...local,
+                shared: false,
+                shareCode: undefined,
+                editToken: undefined,
+                updatedAt: new Date().toISOString(),
+              });
+            }
+            setModal(null);
+            showToast('已停止雲端共享');
+          }}
+        />
       )}
 
       {modal?.type === 'settings' && (
@@ -1054,8 +1079,20 @@ function JoinModal({
   );
 }
 
-function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
+function ShareModal({
+  trip,
+  onClose,
+  onRotated,
+  onUnshared,
+}: {
+  trip: Trip;
+  onClose: () => void;
+  onRotated: (trip: Trip) => void;
+  onUnshared: (tripId: string) => void;
+}) {
   const code = trip.shareCode ?? '';
+  const [busy, setBusy] = useState<'rotate' | 'delete' | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function copy() {
     try {
@@ -1065,17 +1102,78 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
     }
   }
 
+  async function rotate() {
+    if (!trip.shareCode || !trip.editToken) {
+      setError('此裝置沒有編輯權杖，無法輪替');
+      return;
+    }
+    if (!window.confirm('輪替後舊分享碼會失效，同伴需重新輸入新碼。確定？')) return;
+    setBusy('rotate');
+    setError(null);
+    try {
+      const result = await rotateSharedTrip(trip.shareCode, trip.editToken);
+      onRotated({
+        ...result.trip,
+        editToken: result.editToken || result.trip.editToken,
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '輪替失敗');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function stopShare() {
+    if (!trip.shareCode || !trip.editToken) {
+      setError('此裝置沒有編輯權杖，無法停止共享');
+      return;
+    }
+    if (!window.confirm('確定從雲端刪除此共享旅程？本地行程仍會保留。')) return;
+    setBusy('delete');
+    setError(null);
+    try {
+      await deleteSharedTrip(trip.shareCode, trip.editToken);
+      onUnshared(trip.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '刪除失敗');
+    } finally {
+      setBusy(null);
+    }
+  }
+
   return (
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <h3>分享給旅遊同伴</h3>
         <p className="form-hint">把分享碼傳給同伴，對方點「加入同伴」輸入後就能一起改行程。</p>
         <div className="share-code-box">{code}</div>
+        {trip.editToken ? (
+          <p className="form-hint">此裝置持有編輯權杖，可輪替分享碼或停止雲端共享。</p>
+        ) : (
+          <p className="form-hint">此裝置僅能檢視／同步；輪替與停止共享需由建立者操作。</p>
+        )}
+        {error && <p style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>}
         <div className="modal-actions">
-          <button type="button" className="ghost-btn" onClick={onClose}>
+          <button type="button" className="ghost-btn" onClick={onClose} disabled={busy !== null}>
             關閉
           </button>
-          <button type="button" className="primary-btn" onClick={() => void copy()}>
+          <button
+            type="button"
+            className="ghost-btn"
+            onClick={() => void rotate()}
+            disabled={busy !== null || !trip.editToken}
+          >
+            {busy === 'rotate' ? '輪替中…' : '輪替分享碼'}
+          </button>
+          <button
+            type="button"
+            className="danger-btn"
+            onClick={() => void stopShare()}
+            disabled={busy !== null || !trip.editToken}
+          >
+            {busy === 'delete' ? '刪除中…' : '停止共享'}
+          </button>
+          <button type="button" className="primary-btn" onClick={() => void copy()} disabled={!code}>
             複製分享碼
           </button>
         </div>
@@ -1086,12 +1184,22 @@ function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
 
 function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
   const [apiBase, setApiBase] = useState(() => getStoredApiBase());
+  const [error, setError] = useState<string | null>(null);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    setStoredApiBase(apiBase);
-    onSaved();
-    onClose();
+    const cleaned = apiBase.trim();
+    if (cleaned && !isAllowedApiBase(cleaned)) {
+      setError('僅允許 https 的 Cursor Apps 網域（例如 *.apps.grok.bot）');
+      return;
+    }
+    try {
+      setStoredApiBase(cleaned);
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '儲存失敗');
+    }
   }
 
   return (
@@ -1104,13 +1212,18 @@ function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
             <input
               id="api-base"
               value={apiBase}
-              onChange={(e) => setApiBase(e.target.value)}
+              onChange={(e) => {
+                setApiBase(e.target.value);
+                setError(null);
+              }}
               placeholder="網頁版通常留空；APK 可填發布後的網址"
             />
           </div>
           <p className="form-hint">
-            網頁版會自動使用目前網站。手機 APK 若要和同伴雲端同步，請填入已發布的漫旅網址。
+            網頁版會自動使用目前網站。手機 APK 若要和同伴雲端同步，請填入已發布的漫旅網址（僅
+            https Cursor Apps 網域）。
           </p>
+          {error && <p style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>}
           <div className="modal-actions">
             <button type="button" className="ghost-btn" onClick={onClose}>
               取消

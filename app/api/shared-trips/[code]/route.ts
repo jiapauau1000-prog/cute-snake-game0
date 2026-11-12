@@ -9,7 +9,11 @@ import {
   normalizeEditToken,
   normalizeShareCode,
 } from '../../../../src/lib/shareCode';
-import { assertTripPayloadSize, isValidTrip } from '../../../../src/lib/tripValidate';
+import {
+  assertSharedTripImages,
+  assertTripPayloadSize,
+  isValidTrip,
+} from '../../../../src/lib/tripValidate';
 
 export const runtime = 'nodejs';
 
@@ -92,7 +96,7 @@ export async function PUT(request: Request, context: Ctx) {
     }
 
     const raw = await request.text();
-    if (raw.length > 1_500_000) {
+    if (raw.length > 450_000) {
       return NextResponse.json({ error: '請求過大' }, { status: 413 });
     }
 
@@ -107,6 +111,11 @@ export async function PUT(request: Request, context: Ctx) {
 
     if (!isValidTrip(body.trip) || typeof body.revision !== 'number') {
       return NextResponse.json({ error: '更新資料不完整或圖片過大' }, { status: 400 });
+    }
+
+    const imageError = assertSharedTripImages(body.trip);
+    if (imageError) {
+      return NextResponse.json({ error: imageError }, { status: 400 });
     }
 
     const sizeError = assertTripPayloadSize(body.trip);
@@ -176,3 +185,48 @@ export async function PUT(request: Request, context: Ctx) {
     return NextResponse.json({ error: '伺服器更新失敗' }, { status: 500 });
   }
 }
+
+export async function DELETE(request: Request, context: Ctx) {
+  try {
+    const code = normalizeShareCode((await context.params).code);
+    if (!isPlausibleShareCode(code)) {
+      return NextResponse.json({ error: '分享碼無效' }, { status: 400 });
+    }
+
+    const ip = clientIp(request);
+    if (!rateLimit(`shared-del-ip:${ip}`, 10, 60_000)) {
+      return NextResponse.json({ error: '請求過於頻繁，請稍後再試' }, { status: 429 });
+    }
+
+    const raw = await request.text();
+    const body = raw ? (JSON.parse(raw) as { editToken?: unknown }) : {};
+    const headerToken = normalizeEditToken(request.headers.get('x-manlu-edit-token') || '');
+    const bodyToken = typeof body.editToken === 'string' ? normalizeEditToken(body.editToken) : '';
+    const editToken = headerToken || bodyToken;
+    if (!isPlausibleEditToken(editToken)) {
+      return NextResponse.json({ error: '缺少有效的編輯權杖' }, { status: 401 });
+    }
+
+    const current = await sql<{ edit_token: string }>(
+      'select edit_token from shared_trips where share_code = $1',
+      [code],
+    );
+    if (current.length === 0) {
+      return NextResponse.json({ error: '找不到這個分享碼' }, { status: 404 });
+    }
+    if (!secureEqual(current[0].edit_token, editToken)) {
+      return NextResponse.json({ error: '沒有權限刪除此共享旅程' }, { status: 403 });
+    }
+
+    await sql('delete from shared_trips where share_code = $1 and edit_token = $2', [
+      code,
+      editToken,
+    ]);
+
+    return NextResponse.json({ ok: true }, { headers: { 'cache-control': 'no-store' } });
+  } catch (error) {
+    console.error('DELETE /api/shared-trips/[code]', error);
+    return NextResponse.json({ error: '伺服器刪除失敗' }, { status: 500 });
+  }
+}
+

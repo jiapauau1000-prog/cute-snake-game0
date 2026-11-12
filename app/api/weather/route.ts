@@ -71,7 +71,15 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url);
-    const destination = (searchParams.get('destination') || '').trim().slice(0, 80);
+    // Only forward a short place label (no notes, emails, or URLs).
+    const rawDestination = (searchParams.get('destination') || '').trim();
+    if (/@|https?:\/\//i.test(rawDestination)) {
+      return NextResponse.json({ error: '目的地格式無效' }, { status: 400 });
+    }
+    const destination = rawDestination
+      .replace(/[^\p{L}\p{N}\s·・,.-]/gu, '')
+      .replace(/\s+/g, ' ')
+      .slice(0, 40);
     const start = (searchParams.get('start') || '').trim();
     const end = (searchParams.get('end') || '').trim();
 

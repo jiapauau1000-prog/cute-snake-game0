@@ -14,6 +14,23 @@ export function rateLimit(key: string, limit: number, windowMs: number): boolean
   return true;
 }
 
+/**
+ * Prefer platform-provided identity headers. When using X-Forwarded-For,
+ * take the rightmost hop (typically added by the trusted edge), not the
+ * leftmost client-supplied value.
+ */
 export function clientIp(request: Request): string {
-  return request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
+  const realIp = request.headers.get('x-real-ip')?.trim();
+  if (realIp) return realIp;
+
+  const forwarded = request.headers.get('x-forwarded-for');
+  if (forwarded) {
+    const parts = forwarded
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean);
+    if (parts.length > 0) return parts[parts.length - 1];
+  }
+
+  return 'anon';
 }

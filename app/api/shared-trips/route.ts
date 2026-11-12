@@ -3,7 +3,11 @@ import type { Trip } from '../../../src/types';
 import { sql } from '../../../src/lib/db';
 import { clientIp, rateLimit } from '../../../src/lib/rateLimit';
 import { generateEditToken, generateShareCode } from '../../../src/lib/shareCode';
-import { assertTripPayloadSize, isValidTrip } from '../../../src/lib/tripValidate';
+import {
+  assertSharedTripImages,
+  assertTripPayloadSize,
+  isValidTrip,
+} from '../../../src/lib/tripValidate';
 
 export const runtime = 'nodejs';
 
@@ -15,18 +19,26 @@ function stripSecrets(trip: Trip): Trip {
 export async function POST(request: Request) {
   try {
     const ip = clientIp(request);
-    if (!rateLimit(`shared-create:${ip}`, 8, 60_000)) {
+    if (!rateLimit(`shared-create:${ip}`, 3, 60_000)) {
       return NextResponse.json({ error: '建立過於頻繁，請稍後再試' }, { status: 429 });
+    }
+    if (!rateLimit(`shared-create-day:${ip}`, 30, 24 * 60 * 60_000)) {
+      return NextResponse.json({ error: '今日建立次數已達上限' }, { status: 429 });
     }
 
     const raw = await request.text();
-    if (raw.length > 1_500_000) {
+    if (raw.length > 450_000) {
       return NextResponse.json({ error: '請求過大' }, { status: 413 });
     }
 
     const body = JSON.parse(raw) as { trip?: unknown };
     if (!isValidTrip(body.trip)) {
       return NextResponse.json({ error: '旅程資料不完整或圖片過大' }, { status: 400 });
+    }
+
+    const imageError = assertSharedTripImages(body.trip);
+    if (imageError) {
+      return NextResponse.json({ error: imageError }, { status: 400 });
     }
 
     const sizeError = assertTripPayloadSize(body.trip);
@@ -38,7 +50,7 @@ export async function POST(request: Request) {
       'select count(*)::int as count from shared_trips',
     );
     const total = Number(countRows[0]?.count ?? 0);
-    if (total >= 5000) {
+    if (total >= 2000) {
       return NextResponse.json({ error: '共享旅程已達上限，請稍後再試' }, { status: 429 });
     }
 
