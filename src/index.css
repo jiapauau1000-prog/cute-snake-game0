@@ -92,6 +92,38 @@ img {
   animation: rise 0.7s ease both;
 }
 
+.topbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.form-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.share-code-box {
+  margin: 0.75rem 0 0;
+  padding: 1rem;
+  text-align: center;
+  font-family: var(--font-brand);
+  font-size: clamp(1.8rem, 5vw, 2.4rem);
+  letter-spacing: 0.18em;
+  color: var(--sea);
+  background: rgba(126, 189, 194, 0.16);
+  border-radius: 16px;
+}
+
+.sync-label {
+  margin: 0.55rem 0 0;
+  color: var(--sea);
+  font-size: 0.88rem;
+}
+
 .brand {
   display: flex;
   align-items: baseline;
@@ -703,10 +735,10 @@ img {
     width: 100%;
     border-radius: 18px 18px 0 0;
     max-height: min(92dvh, 760px);
-    align-self: end;
+    align-self: flex-end;
   }
 
   .modal-backdrop {
-    align-items: end;
+    align-items: flex-end;
   }
 }

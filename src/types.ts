@@ -30,6 +30,10 @@ export interface Trip {
   days: TripDay[];
   createdAt: string;
   updatedAt: string;
+  /** Present when this trip is shared with companions. */
+  shareCode?: string;
+  shared?: boolean;
+  revision?: number;
 }
 
 export type CoverTone = 'coast' | 'forest' | 'city' | 'sunset';

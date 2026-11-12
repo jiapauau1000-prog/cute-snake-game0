@@ -1,3 +1,5 @@
+'use client';
+
 import { useEffect, useRef, useState } from 'react';
 import type { Activity, CoverTone, Trip } from './types';
 import { CATEGORY_LABELS, COVER_LABELS } from './types';
@@ -19,10 +21,20 @@ import {
   tripDayCount,
   updateTripDates,
 } from './lib/trips';
+import {
+  fetchSharedTrip,
+  getStoredApiBase,
+  publishSharedTrip,
+  pushSharedTrip,
+  setStoredApiBase,
+} from './lib/shareApi';
 
 type Modal =
   | { type: 'trip'; trip?: Trip }
   | { type: 'activity'; dayIndex: number; activity?: Activity }
+  | { type: 'join' }
+  | { type: 'share'; trip: Trip }
+  | { type: 'settings' }
   | null;
 
 export default function App() {
@@ -31,10 +43,14 @@ export default function App() {
   const [dayIndex, setDayIndex] = useState(0);
   const [modal, setModal] = useState<Modal>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [syncLabel, setSyncLabel] = useState<string | null>(null);
   const baselineRef = useRef<Trip[] | null>(trips);
   const skipPersistRef = useRef(false);
+  const skipCloudPushRef = useRef(false);
+  const tripsRef = useRef(trips);
 
   const activeTrip = trips.find((t) => t.id === activeTripId) ?? null;
+  tripsRef.current = trips;
 
   useEffect(() => {
     if (skipPersistRef.current) {
@@ -50,7 +66,7 @@ export default function App() {
       return;
     }
     baselineRef.current = merged;
-    if (merged !== trips && JSON.stringify(merged) !== JSON.stringify(trips)) {
+    if (JSON.stringify(merged) !== JSON.stringify(trips)) {
       skipPersistRef.current = true;
       setTrips(merged);
     }
@@ -80,6 +96,76 @@ export default function App() {
     if (!activeTrip) return;
     if (dayIndex >= activeTrip.days.length) setDayIndex(0);
   }, [activeTrip, dayIndex]);
+
+  // Push shared trip changes to companions (debounced).
+  useEffect(() => {
+    if (skipCloudPushRef.current) {
+      skipCloudPushRef.current = false;
+      return;
+    }
+    const shared = trips.filter((t) => t.shared && t.shareCode);
+    if (shared.length === 0) return;
+
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        for (const trip of shared) {
+          if (!trip.shareCode) continue;
+          try {
+            const result = await pushSharedTrip(trip.shareCode, trip, trip.revision ?? 1);
+            skipCloudPushRef.current = true;
+            setTrips((prev) =>
+              prev.map((item) => (item.id === trip.id ? { ...result.trip } : item)),
+            );
+            setSyncLabel('已同步給同伴');
+          } catch (error) {
+            setSyncLabel(error instanceof Error ? error.message : '同步失敗');
+          }
+        }
+      })();
+    }, 800);
+
+    return () => window.clearTimeout(timer);
+  }, [trips]);
+
+  // Poll shared active trip so companion edits appear.
+  useEffect(() => {
+    if (!activeTrip?.shared || !activeTrip.shareCode) {
+      setSyncLabel(null);
+      return;
+    }
+
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const remote = await fetchSharedTrip(activeTrip.shareCode!);
+        if (cancelled) return;
+        const local = tripsRef.current.find((t) => t.id === activeTrip.id);
+        if (!local) return;
+        if ((remote.revision ?? 0) <= (local.revision ?? 0)) return;
+        if (remote.trip.updatedAt <= local.updatedAt && remote.revision <= (local.revision ?? 0)) {
+          return;
+        }
+        skipCloudPushRef.current = true;
+        setTrips((prev) => prev.map((item) => (item.id === local.id ? remote.trip : item)));
+        setSyncLabel('已套用同伴的更新');
+      } catch {
+        // Keep quiet while offline; share still available locally.
+      }
+    };
+
+    void pull();
+    const timer = window.setInterval(() => void pull(), 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [activeTrip?.id, activeTrip?.shareCode, activeTrip?.shared]);
+
+  useEffect(() => {
+    if (!syncLabel) return;
+    const timer = window.setTimeout(() => setSyncLabel(null), 2000);
+    return () => window.clearTimeout(timer);
+  }, [syncLabel]);
 
   function showToast(message: string) {
     setToast(message);
@@ -127,6 +213,26 @@ export default function App() {
     showToast('已移除活動');
   }
 
+  async function shareTrip(trip: Trip) {
+    try {
+      const result = await publishSharedTrip(trip);
+      upsertTrip(result.trip);
+      setModal({ type: 'share', trip: result.trip });
+      showToast('已建立分享碼');
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : '分享失敗');
+    }
+  }
+
+  async function joinTrip(shareCode: string) {
+    const result = await fetchSharedTrip(shareCode);
+    upsertTrip(result.trip);
+    setActiveTripId(result.trip.id);
+    setDayIndex(0);
+    setModal(null);
+    showToast('已加入同伴旅程');
+  }
+
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -139,11 +245,19 @@ export default function App() {
           >
             漫旅
           </button>
-          <span className="brand-tag">規劃下一趟說走就走的日子</span>
+          <span className="brand-tag">和同伴一起把日子排成風景</span>
         </div>
-        <button type="button" className="primary-btn" onClick={() => setModal({ type: 'trip' })}>
-          新增旅程
-        </button>
+        <div className="topbar-actions">
+          <button type="button" className="ghost-btn" onClick={() => setModal({ type: 'join' })}>
+            加入同伴
+          </button>
+          <button type="button" className="ghost-btn" onClick={() => setModal({ type: 'settings' })}>
+            設定
+          </button>
+          <button type="button" className="primary-btn" onClick={() => setModal({ type: 'trip' })}>
+            新增旅程
+          </button>
+        </div>
       </header>
 
       {!activeTrip ? (
@@ -151,14 +265,23 @@ export default function App() {
           trips={trips}
           onOpen={openTrip}
           onCreate={() => setModal({ type: 'trip' })}
+          onJoin={() => setModal({ type: 'join' })}
         />
       ) : (
         <TripView
           trip={activeTrip}
           dayIndex={dayIndex}
+          syncLabel={syncLabel}
           onDayChange={setDayIndex}
           onBack={() => setActiveTripId(null)}
           onEditTrip={() => setModal({ type: 'trip', trip: activeTrip })}
+          onShareTrip={() => {
+            if (activeTrip.shareCode) {
+              setModal({ type: 'share', trip: activeTrip });
+              return;
+            }
+            void shareTrip(activeTrip);
+          }}
           onDeleteTrip={() => {
             if (window.confirm(`確定刪除「${activeTrip.title}」？`)) deleteTrip(activeTrip.id);
           }}
@@ -228,6 +351,30 @@ export default function App() {
         />
       )}
 
+      {modal?.type === 'join' && (
+        <JoinModal
+          onClose={() => setModal(null)}
+          onJoin={async (code) => {
+            try {
+              await joinTrip(code);
+            } catch (error) {
+              throw error;
+            }
+          }}
+        />
+      )}
+
+      {modal?.type === 'share' && (
+        <ShareModal trip={modal.trip} onClose={() => setModal(null)} />
+      )}
+
+      {modal?.type === 'settings' && (
+        <SettingsModal
+          onClose={() => setModal(null)}
+          onSaved={() => showToast('設定已儲存')}
+        />
+      )}
+
       {toast && <div className="toast">{toast}</div>}
     </div>
   );
@@ -237,10 +384,12 @@ function HomeView({
   trips,
   onOpen,
   onCreate,
+  onJoin,
 }: {
   trips: Trip[];
   onOpen: (id: string) => void;
   onCreate: () => void;
+  onJoin: () => void;
 }) {
   return (
     <>
@@ -249,16 +398,16 @@ function HomeView({
         <div className="hero-content">
           <p className="hero-brand">漫旅</p>
           <h1 className="hero-line">把日子排成風景</h1>
-          <p className="hero-support">依日期規劃每日景點、美食與交通，讓下一趟旅程清楚可走。</p>
+          <p className="hero-support">
+            依日期規劃每日景點與美食，也能用分享碼和旅遊同伴一起即時改行程。
+          </p>
           <div className="hero-actions">
             <button type="button" className="primary-btn" onClick={onCreate}>
               開始規劃
             </button>
-            {trips[0] && (
-              <button type="button" className="ghost-btn" onClick={() => onOpen(trips[0].id)}>
-                查看範例行程
-              </button>
-            )}
+            <button type="button" className="ghost-btn" onClick={onJoin}>
+              加入同伴旅程
+            </button>
           </div>
         </div>
       </section>
@@ -266,16 +415,21 @@ function HomeView({
       <div className="section-head">
         <div>
           <h2>我的旅程</h2>
-          <p>資料保存在此裝置，重新整理也不會遺失。</p>
+          <p>本機會保存；共享旅程會同步給持有分享碼的同伴。</p>
         </div>
       </div>
 
       {trips.length === 0 ? (
         <div className="empty-state">
-          <p>還沒有旅程。點「新增旅程」開始第一趟規劃。</p>
-          <button type="button" className="primary-btn" onClick={onCreate} style={{ marginTop: '1rem' }}>
-            新增旅程
-          </button>
+          <p>還沒有旅程。建立一趟，或輸入同伴的分享碼加入。</p>
+          <div className="hero-actions" style={{ justifyContent: 'center', marginTop: '1rem' }}>
+            <button type="button" className="primary-btn" onClick={onCreate}>
+              新增旅程
+            </button>
+            <button type="button" className="ghost-btn" onClick={onJoin}>
+              加入同伴
+            </button>
+          </div>
         </div>
       ) : (
         <div className="trip-grid">
@@ -290,6 +444,7 @@ function HomeView({
                 <div className="stats">
                   <span>{tripDayCount(trip)} 天</span>
                   <span>{tripActivityCount(trip)} 個活動</span>
+                  {trip.shareCode && <span>共享 {trip.shareCode}</span>}
                 </div>
               </div>
             </button>
@@ -303,9 +458,11 @@ function HomeView({
 function TripView({
   trip,
   dayIndex,
+  syncLabel,
   onDayChange,
   onBack,
   onEditTrip,
+  onShareTrip,
   onDeleteTrip,
   onAddActivity,
   onEditActivity,
@@ -313,9 +470,11 @@ function TripView({
 }: {
   trip: Trip;
   dayIndex: number;
+  syncLabel: string | null;
   onDayChange: (index: number) => void;
   onBack: () => void;
   onEditTrip: () => void;
+  onShareTrip: () => void;
   onDeleteTrip: () => void;
   onAddActivity: () => void;
   onEditActivity: (activity: Activity) => void;
@@ -329,15 +488,28 @@ function TripView({
         <div className="trip-header-top">
           <div>
             <span className="cover-chip">{COVER_LABELS[trip.cover]}氛圍</span>
+            {trip.shareCode && (
+              <span className="cover-chip" style={{ marginLeft: '0.4rem' }}>
+                共享碼 {trip.shareCode}
+              </span>
+            )}
             <h1 className="trip-title">{trip.title}</h1>
             <p className="trip-sub">
               {trip.destination} ・ {formatDateRange(trip.startDate, trip.endDate)}
             </p>
-            {trip.notes && <p className="trip-sub" style={{ marginTop: '0.55rem' }}>{trip.notes}</p>}
+            {trip.notes && (
+              <p className="trip-sub" style={{ marginTop: '0.55rem' }}>
+                {trip.notes}
+              </p>
+            )}
+            {syncLabel && <p className="sync-label">{syncLabel}</p>}
           </div>
           <div className="trip-actions">
             <button type="button" className="ghost-btn" onClick={onBack}>
               返回列表
+            </button>
+            <button type="button" className="primary-btn" onClick={onShareTrip}>
+              {trip.shareCode ? '分享碼' : '分享給同伴'}
             </button>
             <button type="button" className="ghost-btn" onClick={onEditTrip}>
               編輯旅程
@@ -367,7 +539,11 @@ function TripView({
       <div className="section-head" style={{ marginTop: '0.25rem' }}>
         <div>
           <h2>{day ? formatDayHeading(day.date, dayIndex) : '行程'}</h2>
-          <p>{day?.activities.length ? `共 ${day.activities.length} 個活動` : '這天還沒有安排，來加第一個吧。'}</p>
+          <p>
+            {day?.activities.length
+              ? `共 ${day.activities.length} 個活動`
+              : '這天還沒有安排，來加第一個吧。'}
+          </p>
         </div>
         <button type="button" className="primary-btn" onClick={onAddActivity}>
           加入活動
@@ -388,7 +564,12 @@ function TripView({
                 {activity.notes && <p className="notes">{activity.notes}</p>}
               </div>
               <div className="activity-actions">
-                <button type="button" className="icon-btn" aria-label="編輯" onClick={() => onEditActivity(activity)}>
+                <button
+                  type="button"
+                  className="icon-btn"
+                  aria-label="編輯"
+                  onClick={() => onEditActivity(activity)}
+                >
                   ✎
                 </button>
                 <button
@@ -478,11 +659,21 @@ function TripModal({
           <div className="form-row two">
             <div className="form-row">
               <label htmlFor="trip-start">開始日期</label>
-              <input id="trip-start" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <input
+                id="trip-start"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
             </div>
             <div className="form-row">
               <label htmlFor="trip-end">結束日期</label>
-              <input id="trip-end" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              <input
+                id="trip-end"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+              />
             </div>
           </div>
           <div className="form-row">
@@ -615,6 +806,135 @@ function ActivityModal({
             />
           </div>
           {error && <p style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>}
+          <div className="modal-actions">
+            <button type="button" className="ghost-btn" onClick={onClose}>
+              取消
+            </button>
+            <button type="submit" className="primary-btn">
+              儲存
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function JoinModal({
+  onClose,
+  onJoin,
+}: {
+  onClose: () => void;
+  onJoin: (code: string) => Promise<void>;
+}) {
+  const [code, setCode] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!code.trim()) {
+      setError('請輸入分享碼');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await onJoin(code);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加入失敗');
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3>加入同伴旅程</h3>
+        <form className="form-grid" onSubmit={(e) => void submit(e)}>
+          <div className="form-row">
+            <label htmlFor="join-code">分享碼</label>
+            <input
+              id="join-code"
+              value={code}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              placeholder="例如：AB12CD34"
+              autoFocus
+            />
+          </div>
+          <p className="form-hint">向同伴索取 6 碼分享碼後即可一起編輯同一份行程。</p>
+          {error && <p style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>}
+          <div className="modal-actions">
+            <button type="button" className="ghost-btn" onClick={onClose}>
+              取消
+            </button>
+            <button type="submit" className="primary-btn" disabled={busy}>
+              {busy ? '加入中…' : '加入'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ShareModal({ trip, onClose }: { trip: Trip; onClose: () => void }) {
+  const code = trip.shareCode ?? '';
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(code);
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3>分享給旅遊同伴</h3>
+        <p className="form-hint">把分享碼傳給同伴，對方點「加入同伴」輸入後就能一起改行程。</p>
+        <div className="share-code-box">{code}</div>
+        <div className="modal-actions">
+          <button type="button" className="ghost-btn" onClick={onClose}>
+            關閉
+          </button>
+          <button type="button" className="primary-btn" onClick={() => void copy()}>
+            複製分享碼
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => void }) {
+  const [apiBase, setApiBase] = useState(() => getStoredApiBase());
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setStoredApiBase(apiBase);
+    onSaved();
+    onClose();
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <h3>共同編輯設定</h3>
+        <form className="form-grid" onSubmit={submit}>
+          <div className="form-row">
+            <label htmlFor="api-base">同步伺服器網址（選填）</label>
+            <input
+              id="api-base"
+              value={apiBase}
+              onChange={(e) => setApiBase(e.target.value)}
+              placeholder="網頁版通常留空；APK 可填發布後的網址"
+            />
+          </div>
+          <p className="form-hint">
+            網頁版會自動使用目前網站。手機 APK 若要和同伴雲端同步，請填入已發布的漫旅網址。
+          </p>
           <div className="modal-actions">
             <button type="button" className="ghost-btn" onClick={onClose}>
               取消
