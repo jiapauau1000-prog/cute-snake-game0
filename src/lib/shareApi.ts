@@ -74,15 +74,19 @@ export async function pushSharedTrip(
   shareCode: string,
   trip: Trip,
   revision: number,
-  editToken: string,
+  editToken?: string,
 ): Promise<SharedTripResponse> {
   const code = normalizeShareCode(shareCode);
+  const headers: Record<string, string> = {};
+  if (editToken) headers['x-manlu-edit-token'] = editToken;
   return request<SharedTripResponse>(`/api/shared-trips/${encodeURIComponent(code)}`, {
     method: 'PUT',
-    headers: {
-      'x-manlu-edit-token': editToken,
-    },
-    body: JSON.stringify({ trip, revision, editToken }),
+    headers,
+    body: JSON.stringify({
+      trip,
+      revision,
+      ...(editToken ? { editToken } : {}),
+    }),
   });
 }
 

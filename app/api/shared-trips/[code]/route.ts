@@ -39,37 +39,34 @@ export async function GET(request: Request, context: Ctx) {
       return NextResponse.json({ error: '此分享碼查詢過於頻繁' }, { status: 429 });
     }
 
-    const join = new URL(request.url).searchParams.get('join') === '1';
-
+    // Share code grants read + collaborative sync only.
+    // Owner edit_token is never returned here (not even with ?join=1).
     const rows = await sql<{
       share_code: string;
       revision: number;
       payload: Trip;
       updated_at: string;
-      edit_token: string;
-    }>(
-      'select share_code, revision, payload, updated_at, edit_token from shared_trips where share_code = $1',
-      [code],
-    );
+    }>('select share_code, revision, payload, updated_at from shared_trips where share_code = $1', [
+      code,
+    ]);
 
     if (rows.length === 0) {
       return NextResponse.json({ error: '找不到這個分享碼' }, { status: 404 });
     }
 
     const row = rows[0];
-    const trip: Trip = {
+    const trip: Trip = stripSecrets({
       ...row.payload,
       shareCode: row.share_code,
       shared: true,
       revision: row.revision,
-    };
+    });
 
     return NextResponse.json(
       {
         shareCode: row.share_code,
         revision: row.revision,
-        trip: join ? { ...trip, editToken: row.edit_token } : trip,
-        editToken: join ? row.edit_token : undefined,
+        trip,
         updatedAt: row.updated_at,
       },
       { headers: { 'cache-control': 'no-store' } },
@@ -103,11 +100,8 @@ export async function PUT(request: Request, context: Ctx) {
     const body = JSON.parse(raw) as { trip?: unknown; revision?: unknown; editToken?: unknown };
     const headerToken = normalizeEditToken(request.headers.get('x-manlu-edit-token') || '');
     const bodyToken = typeof body.editToken === 'string' ? normalizeEditToken(body.editToken) : '';
-    const editToken = headerToken || bodyToken;
-
-    if (!isPlausibleEditToken(editToken)) {
-      return NextResponse.json({ error: '缺少有效的編輯權杖' }, { status: 401 });
-    }
+    const offeredToken = headerToken || bodyToken;
+    const hasOwnerToken = isPlausibleEditToken(offeredToken);
 
     if (!isValidTrip(body.trip) || typeof body.revision !== 'number') {
       return NextResponse.json({ error: '更新資料不完整或圖片過大' }, { status: 400 });
@@ -131,7 +125,9 @@ export async function PUT(request: Request, context: Ctx) {
       return NextResponse.json({ error: '找不到這個分享碼' }, { status: 404 });
     }
 
-    if (!secureEqual(current[0].edit_token, editToken)) {
+    // Companions may update itinerary with the share code alone.
+    // A wrong edit token is rejected; omit token for collaborator writes.
+    if (hasOwnerToken && !secureEqual(current[0].edit_token, offeredToken)) {
       return NextResponse.json({ error: '沒有權限更新此共享旅程' }, { status: 403 });
     }
 
@@ -160,22 +156,24 @@ export async function PUT(request: Request, context: Ctx) {
     }>(
       `update shared_trips
        set payload = $2::jsonb, revision = $3, trip_id = $4, updated_at = now()
-       where share_code = $1 and edit_token = $5
+       where share_code = $1
        returning share_code, revision, payload, updated_at`,
-      [code, JSON.stringify(trip), nextRevision, trip.id, editToken],
+      [code, JSON.stringify(trip), nextRevision, trip.id],
     );
 
     if (rows.length === 0) {
-      return NextResponse.json({ error: '沒有權限更新此共享旅程' }, { status: 403 });
+      return NextResponse.json({ error: '找不到這個分享碼' }, { status: 404 });
     }
 
     const row = rows[0];
+    const ownerToken =
+      hasOwnerToken && secureEqual(current[0].edit_token, offeredToken) ? offeredToken : undefined;
     return NextResponse.json(
       {
         shareCode: row.share_code,
-        editToken,
+        ...(ownerToken ? { editToken: ownerToken } : {}),
         revision: row.revision,
-        trip: { ...row.payload, editToken },
+        trip: stripSecrets(row.payload),
         updatedAt: row.updated_at,
       },
       { headers: { 'cache-control': 'no-store' } },

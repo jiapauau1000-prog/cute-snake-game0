@@ -117,7 +117,7 @@ export default function App() {
     const timer = window.setTimeout(() => {
       void (async () => {
         for (const trip of shared) {
-          if (!trip.shareCode || !trip.editToken) continue;
+          if (!trip.shareCode) continue;
           try {
             const result = await pushSharedTrip(
               trip.shareCode,
@@ -129,7 +129,7 @@ export default function App() {
             setTrips((prev) =>
               prev.map((item) =>
                 item.id === trip.id
-                  ? { ...result.trip, editToken: result.editToken || trip.editToken }
+                  ? { ...result.trip, editToken: trip.editToken || result.editToken }
                   : item,
               ),
             );
@@ -166,7 +166,7 @@ export default function App() {
         setTrips((prev) =>
           prev.map((item) =>
             item.id === local.id
-              ? { ...remote.trip, editToken: local.editToken || remote.editToken }
+              ? { ...remote.trip, editToken: local.editToken }
               : item,
           ),
         );
@@ -259,10 +259,10 @@ export default function App() {
 
   async function joinTrip(shareCode: string) {
     const result = await fetchSharedTrip(shareCode, { join: true });
-    upsertTrip({
-      ...result.trip,
-      editToken: result.editToken || result.trip.editToken,
-    });
+    // Join never receives the owner edit token — companions can sync edits
+    // via the share code, but cannot delete or rotate the cloud share.
+    const { editToken: _ignored, ...safeTrip } = result.trip;
+    upsertTrip(safeTrip);
     setActiveTripId(result.trip.id);
     setDayIndex(0);
     setModal(null);
@@ -1145,12 +1145,14 @@ function ShareModal({
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
         <h3>分享給旅遊同伴</h3>
-        <p className="form-hint">把分享碼傳給同伴，對方點「加入同伴」輸入後就能一起改行程。</p>
+        <p className="form-hint">把分享碼傳給同伴，對方點「加入同伴」後就能一起改行程與同步。</p>
         <div className="share-code-box">{code}</div>
         {trip.editToken ? (
-          <p className="form-hint">此裝置持有編輯權杖，可輪替分享碼或停止雲端共享。</p>
+          <p className="form-hint">
+            此裝置是建立者：可輪替分享碼或停止雲端共享。請勿把建立者權杖傳給他人。
+          </p>
         ) : (
-          <p className="form-hint">此裝置僅能檢視／同步；輪替與停止共享需由建立者操作。</p>
+          <p className="form-hint">同伴可同步改行程；輪替與停止共享僅建立者可操作。</p>
         )}
         {error && <p style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>}
         <div className="modal-actions">
