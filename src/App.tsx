@@ -1,11 +1,19 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Activity, CoverTone, Trip } from './types';
 import { CATEGORY_LABELS, COVER_LABELS } from './types';
-import { loadTrips, saveTrips, uid } from './lib/storage';
+import {
+  STORAGE_KEY,
+  loadTrips,
+  readStoredTrips,
+  reconcileTrips,
+  saveTrips,
+  uid,
+} from './lib/storage';
 import {
   createTrip,
   formatDateRange,
   formatDayHeading,
+  orphanedActivityCount,
   sortActivities,
   tripActivityCount,
   tripDayCount,
@@ -23,12 +31,44 @@ export default function App() {
   const [dayIndex, setDayIndex] = useState(0);
   const [modal, setModal] = useState<Modal>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const baselineRef = useRef<Trip[] | null>(trips);
+  const skipPersistRef = useRef(false);
 
   const activeTrip = trips.find((t) => t.id === activeTripId) ?? null;
 
   useEffect(() => {
-    saveTrips(trips);
+    if (skipPersistRef.current) {
+      skipPersistRef.current = false;
+      return;
+    }
+
+    const remote = readStoredTrips() ?? [];
+    const merged = reconcileTrips(trips, remote, baselineRef.current);
+    const result = saveTrips(merged);
+    if (!result.ok) {
+      setToast('無法儲存：瀏覽器儲存空間不足或已停用');
+      return;
+    }
+    baselineRef.current = merged;
+    if (merged !== trips && JSON.stringify(merged) !== JSON.stringify(trips)) {
+      skipPersistRef.current = true;
+      setTrips(merged);
+    }
   }, [trips]);
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== STORAGE_KEY) return;
+      const remote = readStoredTrips();
+      if (!remote) return;
+      skipPersistRef.current = true;
+      baselineRef.current = remote;
+      setTrips(remote);
+      setToast('已同步其他分頁的變更');
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   useEffect(() => {
     if (!toast) return;
@@ -134,6 +174,19 @@ export default function App() {
           onClose={() => setModal(null)}
           onSave={(values) => {
             if (modal.trip) {
+              const lost = orphanedActivityCount(
+                modal.trip.days,
+                values.startDate,
+                values.endDate,
+              );
+              if (
+                lost > 0 &&
+                !window.confirm(
+                  `縮短日期後，將有 ${lost} 個活動超出新行程範圍並被移除。確定繼續？`,
+                )
+              ) {
+                return;
+              }
               const updated = updateTripDates(
                 {
                   ...modal.trip,

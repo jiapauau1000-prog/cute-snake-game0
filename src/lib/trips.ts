@@ -2,6 +2,11 @@ import { eachDayOfInterval, format, parseISO } from 'date-fns';
 import type { Activity, CoverTone, Trip, TripDay } from '../types';
 import { uid } from './storage';
 
+/**
+ * Rebuild day slots for a date range.
+ * Activities are remapped by day index so rescheduling (e.g. Apr 10–12 → Apr 17–19)
+ * keeps the itinerary instead of wiping it when dates no longer match.
+ */
 export function buildDays(startDate: string, endDate: string, existing: TripDay[] = []): TripDay[] {
   const start = parseISO(startDate);
   const end = parseISO(endDate);
@@ -9,14 +14,22 @@ export function buildDays(startDate: string, endDate: string, existing: TripDay[
     return [];
   }
 
-  const byDate = new Map(existing.map((d) => [d.date, d.activities]));
-  return eachDayOfInterval({ start, end }).map((day) => {
+  return eachDayOfInterval({ start, end }).map((day, index) => {
     const date = format(day, 'yyyy-MM-dd');
     return {
       date,
-      activities: byDate.get(date) ?? [],
+      activities: structuredClone(existing[index]?.activities ?? []),
     };
   });
+}
+
+/** Activities that would fall off the end when shrinking the trip length. */
+export function orphanedActivityCount(existing: TripDay[], startDate: string, endDate: string): number {
+  const nextLength = buildDays(startDate, endDate).length;
+  if (nextLength === 0) {
+    return existing.reduce((sum, day) => sum + day.activities.length, 0);
+  }
+  return existing.slice(nextLength).reduce((sum, day) => sum + day.activities.length, 0);
 }
 
 export function createTrip(input: {
