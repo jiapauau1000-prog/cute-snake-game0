@@ -417,6 +417,11 @@ export default function App() {
           dayIndex={dayIndex}
           panel={panel}
           syncLabel={syncLabel}
+          syncSticky={syncSticky}
+          onDismissSync={() => {
+            setSyncSticky(false);
+            setSyncLabel(null);
+          }}
           onDayChange={setDayIndex}
           onPanelChange={setPanel}
           onPatchTrip={patchActiveTrip}
@@ -635,6 +640,8 @@ function TripView({
   dayIndex,
   panel,
   syncLabel,
+  syncSticky,
+  onDismissSync,
   onDayChange,
   onPanelChange,
   onPatchTrip,
@@ -650,6 +657,8 @@ function TripView({
   dayIndex: number;
   panel: TripPanel;
   syncLabel: string | null;
+  syncSticky: boolean;
+  onDismissSync: () => void;
   onDayChange: (index: number) => void;
   onPanelChange: (panel: TripPanel) => void;
   onPatchTrip: (patch: Partial<Trip>) => void;
@@ -690,6 +699,14 @@ function TripView({
             {syncLabel && (
               <p className="sync-label" role="status" aria-live="polite">
                 {syncLabel}
+                {syncSticky && (
+                  <>
+                    {' '}
+                    <button type="button" className="sync-dismiss" onClick={onDismissSync}>
+                      知道了
+                    </button>
+                  </>
+                )}
               </p>
             )}
           </div>
@@ -1350,12 +1367,12 @@ function SettingsModal({ onClose, onSaved }: { onClose: () => void; onSaved: () 
                 setApiBase(e.target.value);
                 setError(null);
               }}
-              placeholder="網頁版通常留空；APK 可填發布後的網址"
+              placeholder="https://manlu-travel.apps.grok.bot"
             />
           </div>
           <p className="form-hint">
-            網頁版會自動使用目前網站。手機 APK 若要和同伴雲端同步，請填入已發布的漫旅網址（僅
-            https Cursor Apps 網域）。
+            網頁版通常留空。手機 APK 請填已發布網址（例如 https://manlu-travel.apps.grok.bot），僅允許
+            https Cursor Apps 網域。
           </p>
           {error && <p style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>}
           <div className="modal-actions">

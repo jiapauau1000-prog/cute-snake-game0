@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import type { Trip } from '../../../../../src/types';
 import { sql } from '../../../../../src/lib/db';
+import { matchesOwnerEditToken } from '../../../../../src/lib/ownerAuth';
 import { clientIp, rateLimit } from '../../../../../src/lib/rateLimit';
-import { secureEqual } from '../../../../../src/lib/secureCompare';
 import {
   generateEditToken,
   generateShareCode,
@@ -24,7 +24,7 @@ export async function POST(request: Request, context: Ctx) {
     }
 
     const ip = clientIp(request);
-    if (!rateLimit(`shared-rotate-ip:${ip}`, 5, 60_000)) {
+    if (!(await rateLimit(`shared-rotate-ip:${ip}`, 5, 60_000))) {
       return NextResponse.json({ error: '輪替過於頻繁，請稍後再試' }, { status: 429 });
     }
 
@@ -48,7 +48,7 @@ export async function POST(request: Request, context: Ctx) {
     if (current.length === 0) {
       return NextResponse.json({ error: '找不到這個分享碼' }, { status: 404 });
     }
-    if (!secureEqual(current[0].edit_token, editToken)) {
+    if (!matchesOwnerEditToken(code, current[0].edit_token, editToken)) {
       return NextResponse.json({ error: '沒有權限輪替此共享旅程' }, { status: 403 });
     }
 

@@ -19,10 +19,10 @@ function stripSecrets(trip: Trip): Trip {
 export async function POST(request: Request) {
   try {
     const ip = clientIp(request);
-    if (!rateLimit(`shared-create:${ip}`, 3, 60_000)) {
+    if (!(await rateLimit(`shared-create:${ip}`, 3, 60_000))) {
       return NextResponse.json({ error: '建立過於頻繁，請稍後再試' }, { status: 429 });
     }
-    if (!rateLimit(`shared-create-day:${ip}`, 30, 24 * 60 * 60_000)) {
+    if (!(await rateLimit(`shared-create-day:${ip}`, 30, 24 * 60 * 60_000))) {
       return NextResponse.json({ error: '今日建立次數已達上限' }, { status: 429 });
     }
 

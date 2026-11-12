@@ -66,7 +66,7 @@ function sampleDays(start: string, end: string, destination: string) {
 export async function GET(request: Request) {
   try {
     const ip = clientIp(request);
-    if (!rateLimit(`weather:${ip}`, 20, 60_000)) {
+    if (!(await rateLimit(`weather:${ip}`, 20, 60_000))) {
       return NextResponse.json({ error: '天氣查詢過於頻繁，請稍後再試' }, { status: 429 });
     }
 

@@ -124,6 +124,17 @@ img {
   font-size: 0.88rem;
 }
 
+.sync-dismiss {
+  margin-left: 0.35rem;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .extras {
   margin: 0 0 1.1rem;
 }
