@@ -38,18 +38,43 @@ function apiBase(): string {
   return stored.replace(/\/$/, '');
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+/** Absolute or same-origin API path (APK uses Settings → sync server URL). */
+export function apiUrl(path: string): string {
   const base = apiBase();
-  const res = await fetch(`${base}${path}`, {
+  const normalized = path.startsWith('/') ? path : `/${path}`;
+  return `${base}${normalized}`;
+}
+
+export class ShareApiError extends Error {
+  status: number;
+  revision?: number;
+
+  constructor(message: string, status: number, revision?: number) {
+    super(message);
+    this.name = 'ShareApiError';
+    this.status = status;
+    this.revision = revision;
+  }
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(apiUrl(path), {
     ...init,
     headers: {
       'content-type': 'application/json',
       ...(init?.headers ?? {}),
     },
   });
-  const data = (await res.json().catch(() => ({}))) as T & { error?: string };
+  const data = (await res.json().catch(() => ({}))) as T & {
+    error?: string;
+    revision?: number;
+  };
   if (!res.ok) {
-    throw new Error(data.error || `請求失敗（${res.status}）`);
+    throw new ShareApiError(
+      data.error || `請求失敗（${res.status}）`,
+      res.status,
+      typeof data.revision === 'number' ? data.revision : undefined,
+    );
   }
   return data;
 }

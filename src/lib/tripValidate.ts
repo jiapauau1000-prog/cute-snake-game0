@@ -19,17 +19,36 @@ export function assertSharedTripImages(trip: {
   coverImage?: string;
   days: Array<{ activities: Array<{ imageUrl?: string }> }>;
 }): string | null {
-  if (trip.coverImage?.startsWith('data:')) {
+  if (hasEmbeddedDataImages(trip)) {
     return '共享行程請改用 https 圖片網址，勿上傳大型內嵌圖片';
   }
-  for (const day of trip.days) {
-    for (const activity of day.activities) {
-      if (activity.imageUrl?.startsWith('data:')) {
-        return '共享行程請改用 https 圖片網址，勿上傳大型內嵌圖片';
-      }
-    }
-  }
   return null;
+}
+
+export function hasEmbeddedDataImages(trip: {
+  coverImage?: string;
+  days: Array<{ activities: Array<{ imageUrl?: string }> }>;
+}): boolean {
+  if (trip.coverImage?.startsWith('data:')) return true;
+  return trip.days.some((day) => day.activities.some((a) => a.imageUrl?.startsWith('data:')));
+}
+
+/** Drop local album embeds so cloud sync can proceed; keep https images. */
+export function stripEmbeddedDataImages<T extends {
+  coverImage?: string;
+  days: Array<{ activities: Array<{ imageUrl?: string }> }>;
+}>(trip: T): T {
+  return {
+    ...trip,
+    coverImage: trip.coverImage?.startsWith('data:') ? undefined : trip.coverImage,
+    days: trip.days.map((day) => ({
+      ...day,
+      activities: day.activities.map((activity) => ({
+        ...activity,
+        imageUrl: activity.imageUrl?.startsWith('data:') ? undefined : activity.imageUrl,
+      })),
+    })),
+  };
 }
 
 function isActivity(value: unknown): value is Activity {

@@ -4,6 +4,7 @@ import { sql } from '../../../../src/lib/db';
 import { clientIp, rateLimit } from '../../../../src/lib/rateLimit';
 import { secureEqual } from '../../../../src/lib/secureCompare';
 import {
+  generateEditToken,
   isPlausibleEditToken,
   isPlausibleShareCode,
   normalizeEditToken,
@@ -131,8 +132,8 @@ export async function PUT(request: Request, context: Ctx) {
       return NextResponse.json({ error: '沒有權限更新此共享旅程' }, { status: 403 });
     }
 
-    // Reject stale writes so a blind overwrite without a fresh revision fails.
-    if (body.revision < current[0].revision) {
+    // Only the exact current revision may advance (no skipping ahead).
+    if (body.revision !== current[0].revision) {
       return NextResponse.json(
         { error: '行程已被其他人更新，請重新整理後再試', revision: current[0].revision },
         { status: 409 },
@@ -148,17 +149,30 @@ export async function PUT(request: Request, context: Ctx) {
       updatedAt: new Date().toISOString(),
     };
 
+    const isOwner =
+      hasOwnerToken && secureEqual(current[0].edit_token, offeredToken);
+    // Legacy rows used share_code as edit_token — rotate owner secret on write.
+    const nextOwnerToken =
+      isOwner && current[0].edit_token === code ? generateEditToken(32) : undefined;
+
     const rows = await sql<{
       share_code: string;
       revision: number;
       payload: Trip;
       updated_at: string;
     }>(
-      `update shared_trips
-       set payload = $2::jsonb, revision = $3, trip_id = $4, updated_at = now()
-       where share_code = $1
-       returning share_code, revision, payload, updated_at`,
-      [code, JSON.stringify(trip), nextRevision, trip.id],
+      nextOwnerToken
+        ? `update shared_trips
+           set payload = $2::jsonb, revision = $3, trip_id = $4, edit_token = $5, updated_at = now()
+           where share_code = $1
+           returning share_code, revision, payload, updated_at`
+        : `update shared_trips
+           set payload = $2::jsonb, revision = $3, trip_id = $4, updated_at = now()
+           where share_code = $1
+           returning share_code, revision, payload, updated_at`,
+      nextOwnerToken
+        ? [code, JSON.stringify(trip), nextRevision, trip.id, nextOwnerToken]
+        : [code, JSON.stringify(trip), nextRevision, trip.id],
     );
 
     if (rows.length === 0) {
@@ -166,8 +180,7 @@ export async function PUT(request: Request, context: Ctx) {
     }
 
     const row = rows[0];
-    const ownerToken =
-      hasOwnerToken && secureEqual(current[0].edit_token, offeredToken) ? offeredToken : undefined;
+    const ownerToken = isOwner ? nextOwnerToken || offeredToken : undefined;
     return NextResponse.json(
       {
         shareCode: row.share_code,

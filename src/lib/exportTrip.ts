@@ -114,8 +114,32 @@ export function buildPrintableHtml(trip: Trip): string {
 export function printTrip(trip: Trip): void {
   const html = buildPrintableHtml(trip);
   const w = window.open('', '_blank', 'noopener,noreferrer,width=900,height=700');
-  if (!w) return;
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
+  if (w) {
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    return;
+  }
+
+  // WebView / popup blockers: fall back to a hidden iframe print.
+  const frame = document.createElement('iframe');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
+  document.body.appendChild(frame);
+  const doc = frame.contentDocument;
+  if (!doc) {
+    frame.remove();
+    return;
+  }
+  doc.open();
+  doc.write(html);
+  doc.close();
+  window.setTimeout(() => {
+    try {
+      frame.contentWindow?.focus();
+      frame.contentWindow?.print();
+    } finally {
+      window.setTimeout(() => frame.remove(), 1000);
+    }
+  }, 250);
 }

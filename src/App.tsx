@@ -24,6 +24,7 @@ import {
   updateTripDates,
 } from './lib/trips';
 import {
+  ShareApiError,
   deleteSharedTrip,
   fetchSharedTrip,
   getStoredApiBase,
@@ -33,6 +34,10 @@ import {
   rotateSharedTrip,
   setStoredApiBase,
 } from './lib/shareApi';
+import {
+  hasEmbeddedDataImages,
+  stripEmbeddedDataImages,
+} from './lib/tripValidate';
 import { compressImageFile, isSafeImageSrc } from './lib/images';
 import { mapsEmbedUrl, mapsNavigateUrl, mapsSearchUrl } from './lib/maps';
 
@@ -52,13 +57,25 @@ export default function App() {
   const [modal, setModal] = useState<Modal>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [syncLabel, setSyncLabel] = useState<string | null>(null);
+  const [syncSticky, setSyncSticky] = useState(false);
   const baselineRef = useRef<Trip[] | null>(trips);
   const skipPersistRef = useRef(false);
   const skipCloudPushRef = useRef(false);
   const tripsRef = useRef(trips);
+  const lastPushedAtRef = useRef<Record<string, string>>({});
+  const pushingRef = useRef(false);
 
   const activeTrip = trips.find((t) => t.id === activeTripId) ?? null;
   tripsRef.current = trips;
+  const seededPushRef = useRef(false);
+  if (!seededPushRef.current) {
+    seededPushRef.current = true;
+    for (const trip of trips) {
+      if (trip.shared && trip.shareCode) {
+        lastPushedAtRef.current[trip.id] = trip.updatedAt;
+      }
+    }
+  }
 
   useEffect(() => {
     if (skipPersistRef.current) {
@@ -105,38 +122,88 @@ export default function App() {
     if (dayIndex >= activeTrip.days.length) setDayIndex(0);
   }, [activeTrip, dayIndex]);
 
-  // Push shared trip changes to companions (debounced).
+  // Push only dirty shared trips (debounced).
   useEffect(() => {
     if (skipCloudPushRef.current) {
       skipCloudPushRef.current = false;
       return;
     }
     const shared = trips.filter((t) => t.shared && t.shareCode);
-    if (shared.length === 0) return;
+    const dirty = shared.filter(
+      (t) => lastPushedAtRef.current[t.id] !== t.updatedAt,
+    );
+    if (dirty.length === 0) return;
 
     const timer = window.setTimeout(() => {
+      if (pushingRef.current) return;
+      pushingRef.current = true;
       void (async () => {
-        for (const trip of shared) {
-          if (!trip.shareCode) continue;
-          try {
-            const result = await pushSharedTrip(
-              trip.shareCode,
-              trip,
-              trip.revision ?? 1,
-              trip.editToken,
-            );
-            skipCloudPushRef.current = true;
-            setTrips((prev) =>
-              prev.map((item) =>
-                item.id === trip.id
-                  ? { ...result.trip, editToken: trip.editToken || result.editToken }
-                  : item,
-              ),
-            );
-            setSyncLabel('已同步給同伴');
-          } catch (error) {
-            setSyncLabel(error instanceof Error ? error.message : '同步失敗');
+        try {
+          for (const trip of dirty) {
+            if (!trip.shareCode) continue;
+            const latest = tripsRef.current.find((t) => t.id === trip.id) ?? trip;
+            if (lastPushedAtRef.current[latest.id] === latest.updatedAt) continue;
+            try {
+              setSyncSticky(false);
+              setSyncLabel('同步中…');
+              const stripped = hasEmbeddedDataImages(latest);
+              const payload = stripped ? stripEmbeddedDataImages(latest) : latest;
+              const result = await pushSharedTrip(
+                latest.shareCode!,
+                payload,
+                latest.revision ?? 1,
+                latest.editToken,
+              );
+              // Ignore stale responses if local moved ahead while awaiting.
+              const still = tripsRef.current.find((t) => t.id === latest.id);
+              if (still && still.updatedAt !== latest.updatedAt) {
+                continue;
+              }
+              const merged: Trip = {
+                ...result.trip,
+                editToken: latest.editToken || result.editToken,
+                // Keep local album embeds; cloud payload may have stripped them.
+                coverImage: latest.coverImage,
+                days: latest.days,
+                revision: result.revision,
+                updatedAt: result.trip.updatedAt,
+              };
+              skipCloudPushRef.current = true;
+              lastPushedAtRef.current[latest.id] = merged.updatedAt;
+              setTrips((prev) =>
+                prev.map((item) => (item.id === latest.id ? merged : item)),
+              );
+              setSyncSticky(false);
+              setSyncLabel(
+                stripped ? '已同步（內嵌圖片僅保存在本機）' : '已同步給同伴',
+              );
+            } catch (error) {
+              if (error instanceof ShareApiError && error.status === 409) {
+                try {
+                  const remote = await fetchSharedTrip(latest.shareCode!);
+                  skipCloudPushRef.current = true;
+                  lastPushedAtRef.current[latest.id] = remote.trip.updatedAt;
+                  setTrips((prev) =>
+                    prev.map((item) =>
+                      item.id === latest.id
+                        ? { ...remote.trip, editToken: latest.editToken }
+                        : item,
+                    ),
+                  );
+                  setSyncSticky(true);
+                  setSyncLabel('有衝突，已載入最新版本，請再編輯一次');
+                } catch {
+                  setSyncSticky(true);
+                  setSyncLabel(error.message);
+                }
+              } else {
+                setSyncSticky(true);
+                setSyncLabel(error instanceof Error ? error.message : '同步失敗');
+              }
+            }
           }
+        } finally {
+          pushingRef.current = false;
         }
       })();
     }, 800);
@@ -147,12 +214,13 @@ export default function App() {
   // Poll shared active trip so companion edits appear.
   useEffect(() => {
     if (!activeTrip?.shared || !activeTrip.shareCode) {
-      setSyncLabel(null);
+      if (!syncSticky) setSyncLabel(null);
       return;
     }
 
     let cancelled = false;
     const pull = async () => {
+      if (pushingRef.current) return;
       try {
         const remote = await fetchSharedTrip(activeTrip.shareCode!);
         if (cancelled) return;
@@ -163,6 +231,7 @@ export default function App() {
           return;
         }
         skipCloudPushRef.current = true;
+        lastPushedAtRef.current[local.id] = remote.trip.updatedAt;
         setTrips((prev) =>
           prev.map((item) =>
             item.id === local.id
@@ -170,6 +239,7 @@ export default function App() {
               : item,
           ),
         );
+        setSyncSticky(false);
         setSyncLabel('已套用同伴的更新');
       } catch {
         // Keep quiet while offline; share still available locally.
@@ -182,13 +252,22 @@ export default function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeTrip?.id, activeTrip?.shareCode, activeTrip?.shared]);
+  }, [activeTrip?.id, activeTrip?.shareCode, activeTrip?.shared, syncSticky]);
 
   useEffect(() => {
-    if (!syncLabel) return;
-    const timer = window.setTimeout(() => setSyncLabel(null), 2000);
+    if (!syncLabel || syncSticky) return;
+    const timer = window.setTimeout(() => setSyncLabel(null), 2800);
     return () => window.clearTimeout(timer);
-  }, [syncLabel]);
+  }, [syncLabel, syncSticky]);
+
+  useEffect(() => {
+    if (!modal) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setModal(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [modal]);
 
   function showToast(message: string) {
     setToast(message);
@@ -202,7 +281,20 @@ export default function App() {
     });
   }
 
-  function deleteTrip(id: string) {
+  async function deleteTrip(id: string) {
+    const target = tripsRef.current.find((t) => t.id === id);
+    if (
+      target?.shared &&
+      target.shareCode &&
+      target.editToken &&
+      window.confirm('同時從雲端停止共享此旅程？')
+    ) {
+      try {
+        await deleteSharedTrip(target.shareCode, target.editToken);
+      } catch (error) {
+        showToast(error instanceof Error ? error.message : '雲端刪除失敗，本地仍會移除');
+      }
+    }
     setTrips((prev) => prev.filter((t) => t.id !== id));
     if (activeTripId === id) setActiveTripId(null);
     showToast('已刪除旅程');
@@ -248,10 +340,26 @@ export default function App() {
 
   async function shareTrip(trip: Trip) {
     try {
-      const result = await publishSharedTrip(trip);
-      upsertTrip(result.trip);
-      setModal({ type: 'share', trip: result.trip });
-      showToast('已建立分享碼');
+      const stripped = hasEmbeddedDataImages(trip);
+      if (
+        stripped &&
+        !window.confirm(
+          '相簿內嵌圖片無法上傳到雲端共享，將改以本機保留、雲端不含這些圖片。繼續分享？',
+        )
+      ) {
+        return;
+      }
+      const payload = stripped ? stripEmbeddedDataImages(trip) : trip;
+      const result = await publishSharedTrip(payload);
+      const localKeep: Trip = {
+        ...result.trip,
+        coverImage: trip.coverImage,
+        days: trip.days,
+      };
+      lastPushedAtRef.current[localKeep.id] = localKeep.updatedAt;
+      upsertTrip(localKeep);
+      setModal({ type: 'share', trip: localKeep });
+      showToast(stripped ? '已建立分享碼（圖片留在本機）' : '已建立分享碼');
     } catch (error) {
       showToast(error instanceof Error ? error.message : '分享失敗');
     }
@@ -322,7 +430,9 @@ export default function App() {
             void shareTrip(activeTrip);
           }}
           onDeleteTrip={() => {
-            if (window.confirm(`確定刪除「${activeTrip.title}」？`)) deleteTrip(activeTrip.id);
+            if (window.confirm(`確定刪除「${activeTrip.title}」？`)) {
+              void deleteTrip(activeTrip.id);
+            }
           }}
           onAddActivity={() => setModal({ type: 'activity', dayIndex })}
           onEditActivity={(activity) => setModal({ type: 'activity', dayIndex, activity })}
@@ -436,7 +546,11 @@ export default function App() {
         />
       )}
 
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        <div className="toast" role="status" aria-live="polite">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
@@ -573,7 +687,11 @@ function TripView({
                 {trip.notes}
               </p>
             )}
-            {syncLabel && <p className="sync-label">{syncLabel}</p>}
+            {syncLabel && (
+              <p className="sync-label" role="status" aria-live="polite">
+                {syncLabel}
+              </p>
+            )}
           </div>
           <div className="trip-actions">
             <button type="button" className="ghost-btn" onClick={onBack}>
@@ -670,18 +788,28 @@ function TripView({
                           </a>
                           <button
                             type="button"
-                            onClick={() =>
+                            onClick={() => {
+                              const existing = trip.pins || [];
+                              if (
+                                existing.some(
+                                  (pin) =>
+                                    pin.name.trim().toLowerCase() ===
+                                    activity.place.trim().toLowerCase(),
+                                )
+                              ) {
+                                return;
+                              }
                               onPatchTrip({
                                 pins: [
-                                  ...(trip.pins || []),
+                                  ...existing,
                                   {
                                     id: uid('pin'),
                                     name: activity.place,
                                     note: activity.title,
                                   },
                                 ],
-                              })
-                            }
+                              });
+                            }}
                           >
                             收藏地點
                           </button>
@@ -1094,11 +1222,15 @@ function ShareModal({
   const [busy, setBusy] = useState<'rotate' | 'delete' | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const [copied, setCopied] = useState(false);
+
   async function copy() {
     try {
       await navigator.clipboard.writeText(code);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1600);
     } catch {
-      // ignore
+      setError('無法複製，請手動選取分享碼');
     }
   }
 
@@ -1176,7 +1308,7 @@ function ShareModal({
             {busy === 'delete' ? '刪除中…' : '停止共享'}
           </button>
           <button type="button" className="primary-btn" onClick={() => void copy()} disabled={!code}>
-            複製分享碼
+            {copied ? '已複製' : '複製分享碼'}
           </button>
         </div>
       </div>

@@ -14,6 +14,7 @@ import { ROLE_LABELS } from '../types';
 import { dayBudget, formatMoney, tripBudget } from '../lib/budget';
 import { downloadIcs, printTrip } from '../lib/exportTrip';
 import { mapsNavigateUrl, mapsSearchUrl } from '../lib/maps';
+import { apiUrl } from '../lib/shareApi';
 import { uid } from '../lib/storage';
 import { formatDayHeading } from '../lib/trips';
 
@@ -120,7 +121,9 @@ function WeatherStrip({ trip }: { trip: Trip }) {
     const run = async () => {
       try {
         const res = await fetch(
-          `/api/weather?destination=${encodeURIComponent(trip.destination)}&start=${trip.startDate}&end=${trip.endDate}`,
+          apiUrl(
+            `/api/weather?destination=${encodeURIComponent(trip.destination)}&start=${trip.startDate}&end=${trip.endDate}`,
+          ),
         );
         const json = (await res.json()) as WeatherPayload & { error?: string };
         if (cancelled) return;
@@ -281,8 +284,16 @@ function PinsPanel({
           type="button"
           className="primary-btn"
           onClick={() => {
-            if (!name.trim()) return;
-            onChange([...pins, { id: uid('pin'), name: name.trim(), note: note.trim() }]);
+            const nextName = name.trim();
+            if (!nextName) return;
+            if (
+              pins.some((pin) => pin.name.trim().toLowerCase() === nextName.toLowerCase())
+            ) {
+              setName('');
+              setNote('');
+              return;
+            }
+            onChange([...pins, { id: uid('pin'), name: nextName, note: note.trim() }]);
             setName('');
             setNote('');
           }}
