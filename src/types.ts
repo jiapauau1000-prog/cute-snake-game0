@@ -70,6 +70,8 @@ export interface Trip {
   updatedAt: string;
   /** Present when this trip is shared with companions. */
   shareCode?: string;
+  /** Write credential for shared trip updates; kept on device, not embedded in shared payload. */
+  editToken?: string;
   shared?: boolean;
   revision?: number;
 }

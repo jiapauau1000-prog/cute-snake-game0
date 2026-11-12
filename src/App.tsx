@@ -114,12 +114,21 @@ export default function App() {
     const timer = window.setTimeout(() => {
       void (async () => {
         for (const trip of shared) {
-          if (!trip.shareCode) continue;
+          if (!trip.shareCode || !trip.editToken) continue;
           try {
-            const result = await pushSharedTrip(trip.shareCode, trip, trip.revision ?? 1);
+            const result = await pushSharedTrip(
+              trip.shareCode,
+              trip,
+              trip.revision ?? 1,
+              trip.editToken,
+            );
             skipCloudPushRef.current = true;
             setTrips((prev) =>
-              prev.map((item) => (item.id === trip.id ? { ...result.trip } : item)),
+              prev.map((item) =>
+                item.id === trip.id
+                  ? { ...result.trip, editToken: result.editToken || trip.editToken }
+                  : item,
+              ),
             );
             setSyncLabel('已同步給同伴');
           } catch (error) {
@@ -151,7 +160,13 @@ export default function App() {
           return;
         }
         skipCloudPushRef.current = true;
-        setTrips((prev) => prev.map((item) => (item.id === local.id ? remote.trip : item)));
+        setTrips((prev) =>
+          prev.map((item) =>
+            item.id === local.id
+              ? { ...remote.trip, editToken: local.editToken || remote.editToken }
+              : item,
+          ),
+        );
         setSyncLabel('已套用同伴的更新');
       } catch {
         // Keep quiet while offline; share still available locally.
@@ -240,8 +255,11 @@ export default function App() {
   }
 
   async function joinTrip(shareCode: string) {
-    const result = await fetchSharedTrip(shareCode);
-    upsertTrip(result.trip);
+    const result = await fetchSharedTrip(shareCode, { join: true });
+    upsertTrip({
+      ...result.trip,
+      editToken: result.editToken || result.trip.editToken,
+    });
     setActiveTripId(result.trip.id);
     setDayIndex(0);
     setModal(null);
@@ -1016,11 +1034,11 @@ function JoinModal({
               id="join-code"
               value={code}
               onChange={(e) => setCode(e.target.value.toUpperCase())}
-              placeholder="例如：AB12CD34"
+              placeholder="貼上同伴分享的長碼"
               autoFocus
             />
           </div>
-          <p className="form-hint">向同伴索取 6 碼分享碼後即可一起編輯同一份行程。</p>
+          <p className="form-hint">向同伴索取分享碼（較長的一組）後即可一起編輯同一份行程。</p>
           {error && <p style={{ color: 'var(--danger)', margin: 0 }}>{error}</p>}
           <div className="modal-actions">
             <button type="button" className="ghost-btn" onClick={onClose}>

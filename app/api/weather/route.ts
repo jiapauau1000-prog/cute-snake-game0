@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { clientIp, rateLimit } from '../../../src/lib/rateLimit';
 
 export const runtime = 'nodejs';
 
@@ -64,13 +65,21 @@ function sampleDays(start: string, end: string, destination: string) {
 
 export async function GET(request: Request) {
   try {
+    const ip = clientIp(request);
+    if (!rateLimit(`weather:${ip}`, 20, 60_000)) {
+      return NextResponse.json({ error: '天氣查詢過於頻繁，請稍後再試' }, { status: 429 });
+    }
+
     const { searchParams } = new URL(request.url);
-    const destination = (searchParams.get('destination') || '').trim();
+    const destination = (searchParams.get('destination') || '').trim().slice(0, 80);
     const start = (searchParams.get('start') || '').trim();
     const end = (searchParams.get('end') || '').trim();
 
     if (!destination || !start || !end) {
       return NextResponse.json({ error: '缺少目的地或日期' }, { status: 400 });
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+      return NextResponse.json({ error: '日期格式無效' }, { status: 400 });
     }
 
     const fallback = sampleDays(start, end, destination);

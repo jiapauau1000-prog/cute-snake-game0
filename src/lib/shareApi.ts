@@ -3,6 +3,7 @@ import { normalizeShareCode } from './shareCode';
 
 export type SharedTripResponse = {
   shareCode: string;
+  editToken?: string;
   revision: number;
   trip: Trip;
   updatedAt: string;
@@ -37,20 +38,28 @@ export async function publishSharedTrip(trip: Trip): Promise<SharedTripResponse>
   });
 }
 
-export async function fetchSharedTrip(shareCode: string): Promise<SharedTripResponse> {
+export async function fetchSharedTrip(
+  shareCode: string,
+  options?: { join?: boolean },
+): Promise<SharedTripResponse> {
   const code = normalizeShareCode(shareCode);
-  return request<SharedTripResponse>(`/api/shared-trips/${encodeURIComponent(code)}`);
+  const join = options?.join ? '?join=1' : '';
+  return request<SharedTripResponse>(`/api/shared-trips/${encodeURIComponent(code)}${join}`);
 }
 
 export async function pushSharedTrip(
   shareCode: string,
   trip: Trip,
   revision: number,
+  editToken: string,
 ): Promise<SharedTripResponse> {
   const code = normalizeShareCode(shareCode);
   return request<SharedTripResponse>(`/api/shared-trips/${encodeURIComponent(code)}`, {
     method: 'PUT',
-    body: JSON.stringify({ trip, revision }),
+    headers: {
+      'x-manlu-edit-token': editToken,
+    },
+    body: JSON.stringify({ trip, revision, editToken }),
   });
 }
 

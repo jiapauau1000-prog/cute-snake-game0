@@ -1,63 +1,71 @@
 import { NextResponse } from 'next/server';
 import type { Trip } from '../../../../src/types';
 import { sql } from '../../../../src/lib/db';
-import { normalizeShareCode } from '../../../../src/lib/shareCode';
+import { clientIp, rateLimit } from '../../../../src/lib/rateLimit';
+import { secureEqual } from '../../../../src/lib/secureCompare';
+import {
+  isPlausibleEditToken,
+  isPlausibleShareCode,
+  normalizeEditToken,
+  normalizeShareCode,
+} from '../../../../src/lib/shareCode';
 import { assertTripPayloadSize, isValidTrip } from '../../../../src/lib/tripValidate';
 
 export const runtime = 'nodejs';
 
 type Ctx = { params: Promise<{ code: string }> };
 
-const recentLookups = new Map<string, { count: number; resetAt: number }>();
-
-function rateLimit(key: string, limit: number, windowMs: number): boolean {
-  const now = Date.now();
-  const entry = recentLookups.get(key);
-  if (!entry || entry.resetAt < now) {
-    recentLookups.set(key, { count: 1, resetAt: now + windowMs });
-    return true;
-  }
-  if (entry.count >= limit) return false;
-  entry.count += 1;
-  return true;
+function stripSecrets(trip: Trip): Trip {
+  const { editToken: _editToken, ...rest } = trip;
+  return rest;
 }
 
 export async function GET(request: Request, context: Ctx) {
   try {
     const code = normalizeShareCode((await context.params).code);
-    if (code.length < 4 || code.length > 16) {
+    if (!isPlausibleShareCode(code)) {
       return NextResponse.json({ error: '分享碼無效' }, { status: 400 });
     }
 
-    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
-    if (!rateLimit(`get:${ip}`, 60, 60_000)) {
+    const ip = clientIp(request);
+    if (!rateLimit(`shared-get-ip:${ip}`, 30, 60_000)) {
       return NextResponse.json({ error: '請求過於頻繁，請稍後再試' }, { status: 429 });
     }
+    if (!rateLimit(`shared-get-code:${code}`, 20, 60_000)) {
+      return NextResponse.json({ error: '此分享碼查詢過於頻繁' }, { status: 429 });
+    }
+
+    const join = new URL(request.url).searchParams.get('join') === '1';
 
     const rows = await sql<{
       share_code: string;
       revision: number;
       payload: Trip;
       updated_at: string;
-    }>('select share_code, revision, payload, updated_at from shared_trips where share_code = $1', [
-      code,
-    ]);
+      edit_token: string;
+    }>(
+      'select share_code, revision, payload, updated_at, edit_token from shared_trips where share_code = $1',
+      [code],
+    );
 
     if (rows.length === 0) {
       return NextResponse.json({ error: '找不到這個分享碼' }, { status: 404 });
     }
 
     const row = rows[0];
+    const trip: Trip = {
+      ...row.payload,
+      shareCode: row.share_code,
+      shared: true,
+      revision: row.revision,
+    };
+
     return NextResponse.json(
       {
         shareCode: row.share_code,
         revision: row.revision,
-        trip: {
-          ...row.payload,
-          shareCode: row.share_code,
-          shared: true,
-          revision: row.revision,
-        },
+        trip: join ? { ...trip, editToken: row.edit_token } : trip,
+        editToken: join ? row.edit_token : undefined,
         updatedAt: row.updated_at,
       },
       { headers: { 'cache-control': 'no-store' } },
@@ -71,13 +79,16 @@ export async function GET(request: Request, context: Ctx) {
 export async function PUT(request: Request, context: Ctx) {
   try {
     const code = normalizeShareCode((await context.params).code);
-    if (code.length < 4 || code.length > 16) {
+    if (!isPlausibleShareCode(code)) {
       return NextResponse.json({ error: '分享碼無效' }, { status: 400 });
     }
 
-    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
-    if (!rateLimit(`put:${ip}:${code}`, 40, 60_000)) {
+    const ip = clientIp(request);
+    if (!rateLimit(`shared-put-ip:${ip}`, 30, 60_000)) {
       return NextResponse.json({ error: '更新過於頻繁，請稍後再試' }, { status: 429 });
+    }
+    if (!rateLimit(`shared-put-code:${code}`, 40, 60_000)) {
+      return NextResponse.json({ error: '此行程更新過於頻繁' }, { status: 429 });
     }
 
     const raw = await request.text();
@@ -85,7 +96,15 @@ export async function PUT(request: Request, context: Ctx) {
       return NextResponse.json({ error: '請求過大' }, { status: 413 });
     }
 
-    const body = JSON.parse(raw) as { trip?: unknown; revision?: unknown };
+    const body = JSON.parse(raw) as { trip?: unknown; revision?: unknown; editToken?: unknown };
+    const headerToken = normalizeEditToken(request.headers.get('x-manlu-edit-token') || '');
+    const bodyToken = typeof body.editToken === 'string' ? normalizeEditToken(body.editToken) : '';
+    const editToken = headerToken || bodyToken;
+
+    if (!isPlausibleEditToken(editToken)) {
+      return NextResponse.json({ error: '缺少有效的編輯權杖' }, { status: 401 });
+    }
+
     if (!isValidTrip(body.trip) || typeof body.revision !== 'number') {
       return NextResponse.json({ error: '更新資料不完整或圖片過大' }, { status: 400 });
     }
@@ -95,17 +114,29 @@ export async function PUT(request: Request, context: Ctx) {
       return NextResponse.json({ error: sizeError }, { status: 413 });
     }
 
-    const current = await sql<{ revision: number }>(
-      'select revision from shared_trips where share_code = $1',
+    const current = await sql<{ revision: number; edit_token: string }>(
+      'select revision, edit_token from shared_trips where share_code = $1',
       [code],
     );
     if (current.length === 0) {
       return NextResponse.json({ error: '找不到這個分享碼' }, { status: 404 });
     }
 
-    const nextRevision = Math.max(current[0].revision, body.revision) + 1;
+    if (!secureEqual(current[0].edit_token, editToken)) {
+      return NextResponse.json({ error: '沒有權限更新此共享旅程' }, { status: 403 });
+    }
+
+    // Reject stale writes so a blind overwrite without a fresh revision fails.
+    if (body.revision < current[0].revision) {
+      return NextResponse.json(
+        { error: '行程已被其他人更新，請重新整理後再試', revision: current[0].revision },
+        { status: 409 },
+      );
+    }
+
+    const nextRevision = current[0].revision + 1;
     const trip: Trip = {
-      ...body.trip,
+      ...stripSecrets(body.trip),
       shareCode: code,
       shared: true,
       revision: nextRevision,
@@ -120,17 +151,22 @@ export async function PUT(request: Request, context: Ctx) {
     }>(
       `update shared_trips
        set payload = $2::jsonb, revision = $3, trip_id = $4, updated_at = now()
-       where share_code = $1
+       where share_code = $1 and edit_token = $5
        returning share_code, revision, payload, updated_at`,
-      [code, JSON.stringify(trip), nextRevision, trip.id],
+      [code, JSON.stringify(trip), nextRevision, trip.id, editToken],
     );
+
+    if (rows.length === 0) {
+      return NextResponse.json({ error: '沒有權限更新此共享旅程' }, { status: 403 });
+    }
 
     const row = rows[0];
     return NextResponse.json(
       {
         shareCode: row.share_code,
+        editToken,
         revision: row.revision,
-        trip: row.payload,
+        trip: { ...row.payload, editToken },
         updatedAt: row.updated_at,
       },
       { headers: { 'cache-control': 'no-store' } },
