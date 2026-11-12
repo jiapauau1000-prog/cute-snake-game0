@@ -11,6 +11,25 @@ export const SAMPLE_TRIPS: Trip[] = [
     coverImage:
       'https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?auto=format&fit=crop&w=1200&q=80',
     notes: '櫻花季前夕，避開人潮，以步行與公車為主。',
+    currency: 'TWD',
+    packing: [
+      { id: 'pack_1', label: '舒適步行鞋', done: true },
+      { id: 'pack_2', label: '薄外套', done: false },
+      { id: 'pack_3', label: '行動電源', done: false },
+    ],
+    pins: [{ id: 'pin_1', name: '錦市場 京都', note: '小吃巡禮' }],
+    members: [
+      { id: 'mem_1', name: '小安', role: 'planner' },
+      { id: 'mem_2', name: '阿哲', role: 'booking' },
+    ],
+    comments: [
+      {
+        id: 'cmt_1',
+        author: '小安',
+        text: '清水寺門票我來查線上預約。',
+        createdAt: '2026-03-02T08:00:00.000Z',
+      },
+    ],
     createdAt: '2026-03-01T08:00:00.000Z',
     updatedAt: '2026-03-01T08:00:00.000Z',
     days: [
@@ -34,6 +53,7 @@ export const SAMPLE_TRIPS: Trip[] = [
             time: '13:00',
             category: 'sight',
             notes: '午後光線柔和，適合拍照。',
+            cost: 800,
             imageUrl:
               'https://images.unsplash.com/photo-1524413840807-0c3cb6fa808d?auto=format&fit=crop&w=900&q=80',
           },
@@ -44,6 +64,7 @@ export const SAMPLE_TRIPS: Trip[] = [
             time: '18:30',
             category: 'food',
             notes: '預約京會席或蕎麥麵。',
+            cost: 1200,
             imageUrl:
               'https://images.unsplash.com/photo-1553621042-f6e147245754?auto=format&fit=crop&w=900&q=80',
           },

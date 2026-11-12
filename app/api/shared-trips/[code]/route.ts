@@ -70,11 +70,6 @@ export async function GET(request: Request, context: Ctx) {
 
 export async function PUT(request: Request, context: Ctx) {
   try {
-    const contentLength = Number(request.headers.get('content-length') || '0');
-    if (contentLength > 1_500_000) {
-      return NextResponse.json({ error: '請求過大' }, { status: 413 });
-    }
-
     const code = normalizeShareCode((await context.params).code);
     if (code.length < 4 || code.length > 16) {
       return NextResponse.json({ error: '分享碼無效' }, { status: 400 });
@@ -85,7 +80,12 @@ export async function PUT(request: Request, context: Ctx) {
       return NextResponse.json({ error: '更新過於頻繁，請稍後再試' }, { status: 429 });
     }
 
-    const body = (await request.json()) as { trip?: unknown; revision?: unknown };
+    const raw = await request.text();
+    if (raw.length > 1_500_000) {
+      return NextResponse.json({ error: '請求過大' }, { status: 413 });
+    }
+
+    const body = JSON.parse(raw) as { trip?: unknown; revision?: unknown };
     if (!isValidTrip(body.trip) || typeof body.revision !== 'number') {
       return NextResponse.json({ error: '更新資料不完整或圖片過大' }, { status: 400 });
     }

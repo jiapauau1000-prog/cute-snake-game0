@@ -6,14 +6,33 @@ import { assertTripPayloadSize, isValidTrip } from '../../../src/lib/tripValidat
 
 export const runtime = 'nodejs';
 
+const recentCreates = new Map<string, { count: number; resetAt: number }>();
+
+function rateLimitCreate(ip: string): boolean {
+  const now = Date.now();
+  const entry = recentCreates.get(ip);
+  if (!entry || entry.resetAt < now) {
+    recentCreates.set(ip, { count: 1, resetAt: now + 60_000 });
+    return true;
+  }
+  if (entry.count >= 10) return false;
+  entry.count += 1;
+  return true;
+}
+
 export async function POST(request: Request) {
   try {
-    const contentLength = Number(request.headers.get('content-length') || '0');
-    if (contentLength > 1_500_000) {
+    const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'anon';
+    if (!rateLimitCreate(ip)) {
+      return NextResponse.json({ error: '建立過於頻繁，請稍後再試' }, { status: 429 });
+    }
+
+    const raw = await request.text();
+    if (raw.length > 1_500_000) {
       return NextResponse.json({ error: '請求過大' }, { status: 413 });
     }
 
-    const body = (await request.json()) as { trip?: unknown };
+    const body = JSON.parse(raw) as { trip?: unknown };
     if (!isValidTrip(body.trip)) {
       return NextResponse.json({ error: '旅程資料不完整或圖片過大' }, { status: 400 });
     }

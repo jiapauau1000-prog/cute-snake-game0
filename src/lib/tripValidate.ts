@@ -1,9 +1,18 @@
-import type { Activity, Trip, TripDay } from '../types';
+import type {
+  Activity,
+  PackingItem,
+  PinnedPlace,
+  Trip,
+  TripComment,
+  TripDay,
+  TripMember,
+} from '../types';
 
 const MAX_JSON_BYTES = 1_200_000;
 const MAX_ACTIVITIES_PER_DAY = 40;
 const MAX_DAYS = 60;
 const MAX_IMAGE_CHARS = 400_000;
+const MAX_LIST = 80;
 
 function isActivity(value: unknown): value is Activity {
   if (!value || typeof value !== 'object') return false;
@@ -22,6 +31,9 @@ function isActivity(value: unknown): value is Activity {
     if (typeof a.imageUrl !== 'string' || a.imageUrl.length > MAX_IMAGE_CHARS) return false;
     if (!(a.imageUrl.startsWith('data:image/') || /^https:\/\//i.test(a.imageUrl))) return false;
   }
+  if (a.cost !== undefined && (typeof a.cost !== 'number' || !Number.isFinite(a.cost) || a.cost < 0 || a.cost > 1_000_000_000)) {
+    return false;
+  }
   return true;
 }
 
@@ -33,6 +45,36 @@ function isDay(value: unknown): value is TripDay {
     Array.isArray(d.activities) &&
     d.activities.length <= MAX_ACTIVITIES_PER_DAY &&
     d.activities.every(isActivity)
+  );
+}
+
+function isPacking(value: unknown): value is PackingItem {
+  if (!value || typeof value !== 'object') return false;
+  const p = value as PackingItem;
+  return typeof p.id === 'string' && typeof p.label === 'string' && typeof p.done === 'boolean';
+}
+
+function isPin(value: unknown): value is PinnedPlace {
+  if (!value || typeof value !== 'object') return false;
+  const p = value as PinnedPlace;
+  return typeof p.id === 'string' && typeof p.name === 'string' && typeof p.note === 'string';
+}
+
+function isMember(value: unknown): value is TripMember {
+  if (!value || typeof value !== 'object') return false;
+  const m = value as TripMember;
+  return typeof m.id === 'string' && typeof m.name === 'string' && typeof m.role === 'string';
+}
+
+function isComment(value: unknown): value is TripComment {
+  if (!value || typeof value !== 'object') return false;
+  const c = value as TripComment;
+  return (
+    typeof c.id === 'string' &&
+    typeof c.author === 'string' &&
+    typeof c.text === 'string' &&
+    typeof c.createdAt === 'string' &&
+    c.text.length <= 1000
   );
 }
 
@@ -56,6 +98,21 @@ export function isValidTrip(value: unknown): value is Trip {
     if (!(trip.coverImage.startsWith('data:image/') || /^https:\/\//i.test(trip.coverImage))) {
       return false;
     }
+  }
+  if (trip.packing && (!Array.isArray(trip.packing) || trip.packing.length > MAX_LIST || !trip.packing.every(isPacking))) {
+    return false;
+  }
+  if (trip.pins && (!Array.isArray(trip.pins) || trip.pins.length > MAX_LIST || !trip.pins.every(isPin))) {
+    return false;
+  }
+  if (trip.members && (!Array.isArray(trip.members) || trip.members.length > MAX_LIST || !trip.members.every(isMember))) {
+    return false;
+  }
+  if (
+    trip.comments &&
+    (!Array.isArray(trip.comments) || trip.comments.length > MAX_LIST || !trip.comments.every(isComment))
+  ) {
+    return false;
   }
   return true;
 }

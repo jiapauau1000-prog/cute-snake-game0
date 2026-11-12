@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type { Activity, CoverTone, Trip } from './types';
+import type { Activity, CoverTone, Trip, TripPanel } from './types';
 import { CATEGORY_LABELS, COVER_LABELS } from './types';
+import { TripExtras } from './components/TripExtras';
+import { formatMoney } from './lib/budget';
 import {
   STORAGE_KEY,
   loadTrips,
@@ -43,6 +45,7 @@ export default function App() {
   const [trips, setTrips] = useState<Trip[]>(() => loadTrips());
   const [activeTripId, setActiveTripId] = useState<string | null>(null);
   const [dayIndex, setDayIndex] = useState(0);
+  const [panel, setPanel] = useState<TripPanel>('plan');
   const [modal, setModal] = useState<Modal>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [syncLabel, setSyncLabel] = useState<string | null>(null);
@@ -190,6 +193,16 @@ export default function App() {
   function openTrip(id: string) {
     setActiveTripId(id);
     setDayIndex(0);
+    setPanel('plan');
+  }
+
+  function patchActiveTrip(patch: Partial<Trip>) {
+    if (!activeTrip) return;
+    upsertTrip({
+      ...activeTrip,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    });
   }
 
   function saveActivity(dayIdx: number, activity: Activity, editingId?: string) {
@@ -273,8 +286,11 @@ export default function App() {
         <TripView
           trip={activeTrip}
           dayIndex={dayIndex}
+          panel={panel}
           syncLabel={syncLabel}
           onDayChange={setDayIndex}
+          onPanelChange={setPanel}
+          onPatchTrip={patchActiveTrip}
           onBack={() => setActiveTripId(null)}
           onEditTrip={() => setModal({ type: 'trip', trip: activeTrip })}
           onShareTrip={() => {
@@ -460,8 +476,11 @@ function HomeView({
 function TripView({
   trip,
   dayIndex,
+  panel,
   syncLabel,
   onDayChange,
+  onPanelChange,
+  onPatchTrip,
   onBack,
   onEditTrip,
   onShareTrip,
@@ -472,8 +491,11 @@ function TripView({
 }: {
   trip: Trip;
   dayIndex: number;
+  panel: TripPanel;
   syncLabel: string | null;
   onDayChange: (index: number) => void;
+  onPanelChange: (panel: TripPanel) => void;
+  onPatchTrip: (patch: Partial<Trip>) => void;
   onBack: () => void;
   onEditTrip: () => void;
   onShareTrip: () => void;
@@ -483,6 +505,7 @@ function TripView({
   onRemoveActivity: (id: string) => void;
 }) {
   const day = trip.days[dayIndex];
+  const currency = trip.currency || 'TWD';
 
   return (
     <section className="panel">
@@ -526,99 +549,133 @@ function TripView({
         </div>
       </div>
 
-      <div className="day-tabs" role="tablist" aria-label="每日行程">
-        {trip.days.map((d, index) => (
-          <button
-            key={d.date}
-            type="button"
-            role="tab"
-            aria-selected={index === dayIndex}
-            className={`day-tab${index === dayIndex ? ' active' : ''}`}
-            onClick={() => onDayChange(index)}
-          >
-            Day {index + 1}
-          </button>
-        ))}
-      </div>
+      <TripExtras
+        trip={trip}
+        dayIndex={dayIndex}
+        panel={panel}
+        onPanelChange={onPanelChange}
+        onPatch={onPatchTrip}
+      />
 
-      <div className="section-head" style={{ marginTop: '0.25rem' }}>
-        <div>
-          <h2>{day ? formatDayHeading(day.date, dayIndex) : '行程'}</h2>
-          <p>
-            {day?.activities.length
-              ? `共 ${day.activities.length} 個活動`
-              : '這天還沒有安排，來加第一個吧。'}
-          </p>
-        </div>
-        <button type="button" className="primary-btn" onClick={onAddActivity}>
-          加入活動
-        </button>
-      </div>
+      {panel === 'plan' && (
+        <>
+          <div className="day-tabs" role="tablist" aria-label="每日行程">
+            {trip.days.map((d, index) => (
+              <button
+                key={d.date}
+                type="button"
+                role="tab"
+                aria-selected={index === dayIndex}
+                className={`day-tab${index === dayIndex ? ' active' : ''}`}
+                onClick={() => onDayChange(index)}
+              >
+                Day {index + 1}
+              </button>
+            ))}
+          </div>
 
-      {!day || day.activities.length === 0 ? (
-        <div className="empty-state">尚無活動。可加入景點、餐廳、交通或住宿。</div>
-      ) : (
-        <div className="timeline">
-          {day.activities.map((activity) => (
-            <article key={activity.id} className="activity">
-              <div className="activity-time">{activity.time || '--:--'}</div>
-              <div>
-                <h4>{activity.title}</h4>
-                {activity.place && <p className="place">{activity.place}</p>}
-                <span className="category">{CATEGORY_LABELS[activity.category]}</span>
-                {activity.notes && <p className="notes">{activity.notes}</p>}
-                {isSafeImageSrc(activity.imageUrl) && (
-                  <img className="activity-photo" src={activity.imageUrl} alt={activity.title} />
-                )}
-                {activity.place && (
-                  <>
-                    <div className="activity-tools">
-                      <a
-                        href={mapsNavigateUrl(activity.place)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        導航前往
-                      </a>
-                      <a
-                        href={mapsSearchUrl(activity.place)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        在地圖查看
-                      </a>
-                    </div>
-                    <iframe
-                      className="activity-map"
-                      title={`${activity.title} 地圖`}
-                      loading="lazy"
-                      referrerPolicy="no-referrer-when-downgrade"
-                      src={mapsEmbedUrl(activity.place)}
-                    />
-                  </>
-                )}
-              </div>
-              <div className="activity-actions">
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-label="編輯"
-                  onClick={() => onEditActivity(activity)}
-                >
-                  ✎
-                </button>
-                <button
-                  type="button"
-                  className="icon-btn"
-                  aria-label="刪除"
-                  onClick={() => onRemoveActivity(activity.id)}
-                >
-                  ⌫
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
+          <div className="section-head" style={{ marginTop: '0.25rem' }}>
+            <div>
+              <h2>{day ? formatDayHeading(day.date, dayIndex) : '行程'}</h2>
+              <p>
+                {day?.activities.length
+                  ? `共 ${day.activities.length} 個活動`
+                  : '這天還沒有安排，來加第一個吧。'}
+              </p>
+            </div>
+            <button type="button" className="primary-btn" onClick={onAddActivity}>
+              加入活動
+            </button>
+          </div>
+
+          {!day || day.activities.length === 0 ? (
+            <div className="empty-state">尚無活動。可加入景點、餐廳、交通或住宿。</div>
+          ) : (
+            <div className="timeline">
+              {day.activities.map((activity) => (
+                <article key={activity.id} className="activity">
+                  <div className="activity-time">{activity.time || '--:--'}</div>
+                  <div>
+                    <h4>{activity.title}</h4>
+                    {activity.place && <p className="place">{activity.place}</p>}
+                    <span className="category">{CATEGORY_LABELS[activity.category]}</span>
+                    {typeof activity.cost === 'number' && activity.cost > 0 && (
+                      <span className="category" style={{ marginLeft: '0.35rem' }}>
+                        {formatMoney(activity.cost, currency)}
+                      </span>
+                    )}
+                    {activity.notes && <p className="notes">{activity.notes}</p>}
+                    {isSafeImageSrc(activity.imageUrl) && (
+                      <img className="activity-photo" src={activity.imageUrl} alt={activity.title} />
+                    )}
+                    {activity.place && (
+                      <>
+                        <div className="activity-tools">
+                          <a
+                            href={mapsNavigateUrl(activity.place)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            導航前往
+                          </a>
+                          <a
+                            href={mapsSearchUrl(activity.place)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            在地圖查看
+                          </a>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onPatchTrip({
+                                pins: [
+                                  ...(trip.pins || []),
+                                  {
+                                    id: uid('pin'),
+                                    name: activity.place,
+                                    note: activity.title,
+                                  },
+                                ],
+                              })
+                            }
+                          >
+                            收藏地點
+                          </button>
+                        </div>
+                        <iframe
+                          className="activity-map"
+                          title={`${activity.title} 地圖`}
+                          loading="lazy"
+                          referrerPolicy="no-referrer-when-downgrade"
+                          src={mapsEmbedUrl(activity.place)}
+                        />
+                      </>
+                    )}
+                  </div>
+                  <div className="activity-actions">
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label="編輯"
+                      onClick={() => onEditActivity(activity)}
+                    >
+                      ✎
+                    </button>
+                    <button
+                      type="button"
+                      className="icon-btn"
+                      aria-label="刪除"
+                      onClick={() => onRemoveActivity(activity.id)}
+                    >
+                      ⌫
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </section>
   );
@@ -765,6 +822,7 @@ function ActivityModal({
   const [category, setCategory] = useState(activity?.category ?? 'sight');
   const [notes, setNotes] = useState(activity?.notes ?? '');
   const [imageUrl, setImageUrl] = useState(activity?.imageUrl ?? '');
+  const [cost, setCost] = useState(activity?.cost?.toString() ?? '');
   const [error, setError] = useState('');
   const [busyImage, setBusyImage] = useState(false);
 
@@ -792,6 +850,11 @@ function ActivityModal({
       setError('圖片網址需為 https 或已上傳的圖片');
       return;
     }
+    const parsedCost = cost.trim() === '' ? undefined : Number(cost);
+    if (parsedCost !== undefined && (!Number.isFinite(parsedCost) || parsedCost < 0)) {
+      setError('金額需為 0 以上的數字');
+      return;
+    }
     onSave({
       title: title.trim(),
       place: place.trim(),
@@ -799,6 +862,7 @@ function ActivityModal({
       category,
       notes: notes.trim(),
       imageUrl: imageUrl.trim() || undefined,
+      cost: parsedCost,
     });
   }
 
@@ -850,6 +914,18 @@ function ActivityModal({
               value={place}
               onChange={(e) => setPlace(e.target.value)}
               placeholder="店名、車站或景點"
+            />
+          </div>
+          <div className="form-row">
+            <label htmlFor="act-cost">花費金額（選填）</label>
+            <input
+              id="act-cost"
+              type="number"
+              min="0"
+              step="1"
+              value={cost}
+              onChange={(e) => setCost(e.target.value)}
+              placeholder="例如：350"
             />
           </div>
           <div className="form-row">

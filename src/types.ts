@@ -5,6 +5,8 @@ export type ActivityCategory =
   | 'stay'
   | 'other';
 
+export type MemberRole = 'planner' | 'booking' | 'transport' | 'food' | 'other';
+
 export interface Activity {
   id: string;
   title: string;
@@ -14,11 +16,38 @@ export interface Activity {
   notes: string;
   /** https URL or compressed data:image JPEG */
   imageUrl?: string;
+  /** Expense amount in trip currency */
+  cost?: number;
 }
 
 export interface TripDay {
   date: string;
   activities: Activity[];
+}
+
+export interface PackingItem {
+  id: string;
+  label: string;
+  done: boolean;
+}
+
+export interface PinnedPlace {
+  id: string;
+  name: string;
+  note: string;
+}
+
+export interface TripMember {
+  id: string;
+  name: string;
+  role: MemberRole;
+}
+
+export interface TripComment {
+  id: string;
+  author: string;
+  text: string;
+  createdAt: string;
 }
 
 export interface Trip {
@@ -31,6 +60,11 @@ export interface Trip {
   notes: string;
   /** Optional trip cover photo (https or data URL). */
   coverImage?: string;
+  currency?: string;
+  packing?: PackingItem[];
+  pins?: PinnedPlace[];
+  members?: TripMember[];
+  comments?: TripComment[];
   days: TripDay[];
   createdAt: string;
   updatedAt: string;
@@ -56,3 +90,13 @@ export const COVER_LABELS: Record<CoverTone, string> = {
   city: '城市',
   sunset: '暮色',
 };
+
+export const ROLE_LABELS: Record<MemberRole, string> = {
+  planner: '行程規劃',
+  booking: '訂房訂票',
+  transport: '交通',
+  food: '美食預約',
+  other: '其他',
+};
+
+export type TripPanel = 'plan' | 'budget' | 'packing' | 'pins' | 'team';

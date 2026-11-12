@@ -124,6 +124,131 @@ img {
   font-size: 0.88rem;
 }
 
+.extras {
+  margin: 0 0 1.1rem;
+}
+
+.export-bar,
+.panel-tabs,
+.inline-form,
+.weather-grid,
+.budget-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+}
+
+.export-bar {
+  margin-bottom: 0.75rem;
+}
+
+.panel-tabs {
+  margin-bottom: 0.85rem;
+}
+
+.weather-strip,
+.extra-card {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 0.9rem 1rem;
+  margin-bottom: 0.85rem;
+}
+
+.weather-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 0.55rem;
+}
+
+.weather-card {
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.65rem;
+  border-radius: 12px;
+  background: linear-gradient(160deg, rgba(126, 189, 194, 0.2), rgba(255, 255, 255, 0.9));
+  font-size: 0.84rem;
+}
+
+.budget-stats > div,
+.budget-list li,
+.check-list li,
+.pin-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.budget-stats > div {
+  flex: 1;
+  min-width: 140px;
+  padding: 0.75rem;
+  border-radius: 12px;
+  background: rgba(11, 79, 108, 0.06);
+}
+
+.budget-stats strong,
+.budget-list strong {
+  color: var(--sea);
+  font-size: 1.05rem;
+}
+
+.budget-list,
+.check-list,
+.comment-list,
+.pin-list {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  display: grid;
+  gap: 0.55rem;
+}
+
+.check-list label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.check-list .done {
+  text-decoration: line-through;
+  color: var(--muted);
+}
+
+.inline-form input,
+.inline-form select {
+  flex: 1;
+  min-width: 120px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.65rem 0.75rem;
+  background: #fbfcfd;
+}
+
+.pin-card,
+.comment-list li {
+  padding: 0.75rem;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.comment-list li span {
+  margin-left: 0.5rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.comment-list li p {
+  margin: 0.35rem 0 0;
+}
+
+.extra-card h3 {
+  margin: 0 0 0.45rem;
+  font-family: var(--font-display);
+}
+
 .brand {
   display: flex;
   align-items: baseline;
